@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>あの場所は今_イーグル隊長の空中散歩</title>
+  <meta name="description" content="イーグル隊長の背中に乗って、世界遺産や日本のお城を空から巡る空中散歩Webアプリ">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🦅</text></svg>">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Dela+Gothic+One&family=M+PLUS+1p:wght@400;500;700;800&display=swap" rel="stylesheet">
+
+  <!-- CesiumJS（3D地球・航空写真） -->
+  <link href="https://cdn.jsdelivr.net/npm/cesium@1.121.0/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/cesium@1.121.0/Build/Cesium/Cesium.js"></script>
+
+  <link rel="stylesheet" href="style.css?v=1.0.1">
+</head>
+<body>
+
+  <!-- ===== 地図（3D地球） ===== -->
+  <div id="cesiumContainer"></div>
+  <div id="windStreaks" aria-hidden="true"></div>
+
+  <!-- ===== 上部バー：タイトル・テーマ切替・ユーザー ===== -->
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">🦅</span>
+      <h1 id="appTitle" class="brand-title">イーグル隊長の空中散歩</h1>
+    </div>
+
+    <nav id="themeTabs" class="theme-tabs" aria-label="テーマ切り替え"></nav>
+    <label class="theme-select-wrap">
+      <span class="sr-only">テーマ</span>
+      <select id="themeSelect" class="theme-select"></select>
+    </label>
+
+    <div class="user-area">
+      <button id="btnMute" class="icon-btn" title="音声のオン/オフ" aria-label="音声のオン/オフ">🔊</button>
+      <button id="btnImport" class="icon-btn" title="スポットを取り込む" aria-label="スポットを取り込む">＋</button>
+      <div class="user-menu">
+        <button id="btnUser" class="user-chip" aria-haspopup="true" aria-expanded="false">
+          <span aria-hidden="true">🧑‍✈️</span><span id="userName">搭乗者</span>
+        </button>
+        <div id="userDropdown" class="dropdown hidden" role="menu">
+          <button id="btnChangePw" role="menuitem">パスワード変更</button>
+          <button id="btnLogout" role="menuitem">ログアウト</button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- ===== 計器（HUD） ===== -->
+  <aside class="hud" aria-label="飛行計器">
+    <div class="hud-row"><span class="hud-k">高度</span><span id="hudAlt" class="hud-v">----</span></div>
+    <div class="hud-row"><span class="hud-k">方位</span><span id="hudHdg" class="hud-v">---</span></div>
+    <div class="hud-row"><span class="hud-k">機首</span><span id="hudPitch" class="hud-v">--</span></div>
+    <div class="hud-row hud-target"><span class="hud-k">現在地</span><span id="hudTarget" class="hud-v">上空待機中</span></div>
+  </aside>
+
+  <!-- ===== 行き先選定パネル ===== -->
+  <section class="mode-panel" aria-label="行き先の決め方">
+    <button class="mode-btn mode-dive" id="btnRoulette">
+      <span class="mode-ico" aria-hidden="true">🎯</span>
+      <span class="mode-name">おまかせダイブ</span>
+    </button>
+    <button class="mode-btn mode-wind" id="btnWind">
+      <span class="mode-ico" aria-hidden="true">🌬️</span>
+      <span class="mode-name">気流ガチャ</span>
+    </button>
+    <button class="mode-btn mode-quiz" id="btnQuiz">
+      <span class="mode-ico" aria-hidden="true">❓</span>
+      <span class="mode-name">隊長の挑戦状</span>
+    </button>
+    <button class="mode-btn mode-home" id="btnOverview" title="テーマ全体を見渡す">
+      <span class="mode-ico" aria-hidden="true">🗺️</span>
+      <span class="mode-name">全体を見る</span>
+    </button>
+  </section>
+
+  <!-- ===== イーグル隊長（吹き出し） ===== -->
+  <div id="captain" class="captain" aria-live="polite">
+    <div class="captain-avatar" aria-hidden="true">🦅</div>
+    <div class="captain-bubble hidden" id="captainBubble">
+      <div class="captain-name">イーグル隊長</div>
+      <p id="captainText"></p>
+    </div>
+  </div>
+
+  <!-- ===== 気流ガチャ演出 ===== -->
+  <div id="windGacha" class="wind-gacha hidden" aria-live="polite">
+    <div class="compass">
+      <div class="compass-ring">
+        <span class="cn">北</span><span class="ce">東</span><span class="cs">南</span><span class="cw">西</span>
+      </div>
+      <div id="windArrow" class="wind-arrow"></div>
+    </div>
+    <div class="wind-readout">
+      <div class="wind-line"><span>高度</span><b id="windAlt">----</b></div>
+      <div class="wind-line"><span>風向</span><b id="windDir">---</b></div>
+      <div class="wind-line"><span>風速</span><b id="windSpd">--</b></div>
+      <p id="windMsg" class="wind-msg"></p>
+    </div>
+  </div>
+
+  <!-- ===== スポットカード（フライトログ） ===== -->
+  <aside id="spotCard" class="spot-card hidden" aria-live="polite">
+    <button class="card-close" id="cardClose" aria-label="閉じる">×</button>
+    <div class="card-head">
+      <div id="cardTheme" class="card-theme"></div>
+      <h2 id="cardName" class="card-name"></h2>
+      <div id="cardCoords" class="card-coords"></div>
+      <div id="cardTags" class="card-tags"></div>
+    </div>
+    <div id="cardBody" class="card-body"></div>
+  </aside>
+
+  <!-- ===== 映像オーバーレイ ===== -->
+  <div id="videoOverlay" class="video-overlay hidden">
+    <div class="video-frame" id="videoFrame"></div>
+    <button class="video-close" id="videoClose">映像を閉じる</button>
+  </div>
+
+  <!-- ===== クイズモーダル ===== -->
+  <div id="quizModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="quizTitle">
+    <div class="modal-box quiz-box">
+      <h2 id="quizTitle" class="modal-title">隊長の挑戦状</h2>
+      <div id="quizContent"></div>
+    </div>
+  </div>
+
+  <!-- ===== スポット取り込みモーダル（Gemini） ===== -->
+  <div id="importModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="importTitle">
+    <div class="modal-box import-box">
+      <button class="modal-x" id="importClose" aria-label="閉じる">×</button>
+      <h2 id="importTitle" class="modal-title">スポットをAIで取り込む</h2>
+
+      <div class="form-row">
+        <label for="importTheme">保存先のテーマ</label>
+        <select id="importTheme"></select>
+      </div>
+
+      <div id="newThemeFields" class="new-theme hidden">
+        <div class="form-row">
+          <label for="ntName">新しいテーマ名</label>
+          <input id="ntName" type="text" placeholder="例：京都の名刹めぐり">
+        </div>
+        <div class="form-grid">
+          <div class="form-row">
+            <label for="ntId">テーマID（半角英数と_）</label>
+            <input id="ntId" type="text" placeholder="kyoto_temples">
+          </div>
+          <div class="form-row">
+            <label for="ntIcon">アイコン</label>
+            <input id="ntIcon" type="text" placeholder="🛕" maxlength="4">
+          </div>
+        </div>
+      </div>
+
+      <div class="form-row">
+        <label for="importPrompt">どんなスポットを取り込みますか</label>
+        <textarea id="importPrompt" rows="3" placeholder="例：近畿地方の名城 5選 ／ 京都の有名寺社 ／ ヨーロッパの古城"></textarea>
+      </div>
+      <div class="form-grid">
+        <div class="form-row">
+          <label for="importCount">件数</label>
+          <input id="importCount" type="number" min="1" max="10" value="5">
+        </div>
+        <div class="form-row form-row-btn">
+          <button id="btnGenerate" class="btn btn-primary">AIでリストを作る</button>
+        </div>
+      </div>
+
+      <div id="importPreview" class="import-preview"></div>
+      <p class="hint">AIが作った緯度・経度は誤っていることがあります。保存前に地図リンクで位置を確認してください。</p>
+
+      <div class="modal-actions">
+        <button id="btnSaveSpots" class="btn btn-primary" disabled>チェックしたスポットを保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 認証ゲート（ログイン・登録・再発行） ===== -->
+  <div id="authGate" class="auth-gate">
+    <div class="auth-box">
+      <div class="auth-hero">
+        <div class="auth-eagle" aria-hidden="true">🦅</div>
+        <p class="auth-catch">ワシの背中に乗る準備はいいか！</p>
+        <h2 class="auth-title">あの場所は今<br><span>イーグル隊長の空中散歩</span></h2>
+      </div>
+
+      <div class="auth-tabs" role="tablist">
+        <button class="auth-tab active" data-tab="login" role="tab">ログイン</button>
+        <button class="auth-tab" data-tab="register" role="tab">新規登録</button>
+        <button class="auth-tab" data-tab="forgot" role="tab">パスワード再発行</button>
+      </div>
+
+      <!-- ログイン -->
+      <form id="formLogin" class="auth-form" data-panel="login" novalidate>
+        <div class="form-row">
+          <label for="loginEmail">メールアドレス</label>
+          <input id="loginEmail" type="email" autocomplete="email" required>
+        </div>
+        <div class="form-row">
+          <label for="loginPw">パスワード</label>
+          <div class="pw-wrap">
+            <input id="loginPw" type="password" autocomplete="current-password" required>
+            <button type="button" class="pw-eye" aria-label="パスワードを表示"></button>
+          </div>
+        </div>
+        <button type="submit" class="btn btn-primary btn-block">搭乗する</button>
+      </form>
+
+      <!-- 新規登録 -->
+      <form id="formRegister" class="auth-form hidden" data-panel="register" novalidate>
+        <div class="form-row">
+          <label for="regEmail">メールアドレス</label>
+          <input id="regEmail" type="email" autocomplete="email" required>
+        </div>
+        <div class="form-row">
+          <label for="regName">ニックネーム</label>
+          <input id="regName" type="text" maxlength="20" required>
+        </div>
+        <p class="hint">登録すると仮パスワードがメールで届きます。初回ログイン時に新しいパスワードを設定してください。</p>
+        <button type="submit" class="btn btn-primary btn-block">仮パスワードを受け取る</button>
+      </form>
+
+      <!-- パスワード再発行 -->
+      <form id="formForgot" class="auth-form hidden" data-panel="forgot" novalidate>
+        <div class="form-row">
+          <label for="forgotEmail">登録したメールアドレス</label>
+          <input id="forgotEmail" type="email" autocomplete="email" required>
+        </div>
+        <p class="hint">新しい仮パスワードをメールでお送りします。</p>
+        <button type="submit" class="btn btn-primary btn-block">仮パスワードを再発行する</button>
+      </form>
+
+      <p id="authMsg" class="auth-msg" role="alert"></p>
+      <p id="authVersion" class="auth-version"></p>
+    </div>
+  </div>
+
+  <!-- ===== パスワード変更モーダル（初回強制／任意） ===== -->
+  <div id="pwModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="pwTitle">
+    <div class="modal-box pw-box">
+      <button class="modal-x hidden" id="pwClose" aria-label="閉じる">×</button>
+      <h2 id="pwTitle" class="modal-title">新しいパスワードを設定</h2>
+      <p id="pwLead" class="hint">仮パスワードでログインしました。続けるには新しいパスワードを設定してください。</p>
+      <form id="formPw" novalidate>
+        <div class="form-row" id="pwCurrentRow">
+          <label for="pwCurrent">現在のパスワード</label>
+          <div class="pw-wrap">
+            <input id="pwCurrent" type="password" autocomplete="current-password">
+            <button type="button" class="pw-eye" aria-label="パスワードを表示"></button>
+          </div>
+        </div>
+        <div class="form-row">
+          <label for="pwNew">新しいパスワード（8文字以上・英字と数字を含む）</label>
+          <div class="pw-wrap">
+            <input id="pwNew" type="password" autocomplete="new-password">
+            <button type="button" class="pw-eye" aria-label="パスワードを表示"></button>
+          </div>
+        </div>
+        <div class="form-row">
+          <label for="pwNew2">新しいパスワード（確認）</label>
+          <div class="pw-wrap">
+            <input id="pwNew2" type="password" autocomplete="new-password">
+            <button type="button" class="pw-eye" aria-label="パスワードを表示"></button>
+          </div>
+        </div>
+        <p id="pwMsg" class="auth-msg" role="alert"></p>
+        <button type="submit" class="btn btn-primary btn-block">パスワードを変更する</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- ===== 共通 ===== -->
+  <div id="loading" class="loading hidden"><div class="loading-eagle">🦅</div><p id="loadingText">通信中…</p></div>
+  <div id="toast" class="toast" role="status"></div>
+  <div id="versionBadge" class="version-badge"></div>
+
+  <script src="config.js?v=1.0.1"></script>
+  <script src="auth.js?v=1.0.1"></script>
+  <script src="app.js?v=1.0.1"></script>
+</body>
+</html>
