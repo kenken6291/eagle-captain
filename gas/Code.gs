@@ -380,9 +380,14 @@ function normalizeSpot_(s) {
  * Gemini 連携
  * ========================================================= */
 function generateSpots_(req) {
+  // names があれば「名前リスト」モード、なければ「キーワード」モード
+  const names = Array.isArray(req.names)
+    ? req.names.map(n => String(n || "").trim().slice(0, 60)).filter(n => n).slice(0, 30)
+    : null;
   const prompt = String(req.prompt || "").trim().slice(0, 300);
-  const count = Math.min(10, Math.max(1, Number(req.count) || 5));
-  if (!prompt) throw err_("取り込みたい内容を入力してください");
+  if (names && !names.length) throw err_("スポット名を入力してください");
+  if (!names && !prompt) throw err_("取り込みたい内容を入力してください");
+  const count = names ? names.length : Math.min(10, Math.max(1, Number(req.count) || 5));
 
   const schema = {
     type: "OBJECT",
@@ -408,9 +413,19 @@ function generateSpots_(req) {
     required: ["spots"]
   };
 
-  const text = [
-    "次のリクエストに合う実在の観光スポットを" + count + "件、JSONで出力してください。",
-    "リクエスト：" + prompt,
+  const intro = names
+    ? [
+        "次のスポット名の一覧について、それぞれの場所を特定してJSONで出力してください。",
+        "一覧の順番どおりに1件ずつ出力し、実在の場所として特定できないものは出力しないでください。",
+        "スポット名の一覧：",
+        names.map((n, i) => (i + 1) + ". " + n).join("\n"),
+        "name は一覧の表記を基本とし、地域名などの補足は外して正式名称に整えてください。"
+      ]
+    : [
+        "次のリクエストに合う実在の観光スポットを" + count + "件、JSONで出力してください。",
+        "リクエスト：" + prompt
+      ];
+  const text = intro.concat([
     req.theme_name ? "テーマ：" + req.theme_name : "",
     "",
     "各項目のルール：",
@@ -421,7 +436,7 @@ function generateSpots_(req) {
     "- pitch: カメラの傾斜角 -45〜-15",
     "- eagle_comment: イーグル隊長の口調で、そのスポットを上空から案内するセリフ（80〜100文字）",
     "- tags: 都道府県や国、種別などをカンマ区切りで3つ程度"
-  ].filter(Boolean).join("\n");
+  ]).filter(Boolean).join("\n");
 
   const out = gemini_(text, schema, { system: CAPTAIN_SYSTEM, temperature: 0.4 });
   const spots = (out.spots || []).map(normalizeSpot_).filter(s => s);

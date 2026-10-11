@@ -21,6 +21,7 @@
     started: false,
     viewer: null,
     terrainOn: false,
+    photoreal: false,   // Google フォトリアル3D が有効か
     themes: [],
     themeId: "",
     spots: [],
@@ -237,25 +238,30 @@
     if (S.started) return;
     S.started = true;
     $("#appTitle").textContent = APP_CONFIG.APP_TITLE.replace(/^あの場所は今_/, "");
-    initViewer();
+    await initViewer();
     bindUI();
     updateMuteBtn();
     await loadThemes();
     Voice.say(`よく来たな、${user?.display_name || "搭乗者"}！ワシがイーグル隊長だ！今日はどこへ飛ぶ？`);
   }
 
-  function initViewer() {
+  async function initViewer() {
     if (APP_CONFIG.CESIUM_ION_TOKEN) C.Ion.defaultAccessToken = APP_CONFIG.CESIUM_ION_TOKEN;
     S.terrainOn = !!APP_CONFIG.CESIUM_ION_TOKEN;
 
-    const imagery = new C.UrlTemplateImageryProvider({
-      url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-      maximumLevel: 19,
-      credit: new C.Credit("Imagery © Esri, Maxar, Earthstar Geographics")
+    // 予備の地表：Esri 航空写真（Google 3D が使えないとき）
+    const baseLayer = C.ImageryLayer.fromProviderAsync(
+      C.ArcGisMapServerImageryProvider.fromBasemapType(C.ArcGisBaseMapType.SATELLITE)
+    );
+    baseLayer.errorEvent.addEventListener(() => {
+      S.viewer.imageryLayers.addImageryProvider(new C.UrlTemplateImageryProvider({
+        url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png", maximumLevel: 19,
+        credit: new C.Credit("© OpenStreetMap contributors")
+      }));
     });
 
     const opts = {
-      baseLayer: new C.ImageryLayer(imagery),
+      baseLayer,
       baseLayerPicker: false, geocoder: false, homeButton: false, sceneModePicker: false,
       navigationHelpButton: false, animation: false, timeline: false, fullscreenButton: false,
       infoBox: false, selectionIndicator: false
@@ -266,10 +272,25 @@
     S.viewer = v;
     v.scene.globe.depthTestAgainstTerrain = false;
     v.scene.fog.enabled = true;
+    v.scene.fog.density = 0.00025;
     v.scene.skyAtmosphere.show = true;
+    v.scene.highDynamicRange = false;
     v.camera.setView({ destination: C.Cartesian3.fromDegrees(139.7, 35.6, 2.0e7) });
 
-    if (S.terrainOn) {
+    // 本命：Google フォトリアル3D（立体の街並み・山並み）
+    if (APP_CONFIG.GOOGLE_MAPS_API_KEY) {
+      try {
+        C.GoogleMaps.defaultApiKey = APP_CONFIG.GOOGLE_MAPS_API_KEY;
+        const tileset = await C.createGooglePhotorealistic3DTileset();
+        tileset.maximumScreenSpaceError = 16;
+        v.scene.primitives.add(tileset);
+        v.scene.globe.show = false;   // 地球の平面画像は隠して3Dだけを見せる
+        S.photoreal = true;
+      } catch (e) {
+        console.warn("Google 3D tiles failed", e);
+        showToast("Googleの3D地図を読み込めませんでした。APIキーとMap Tiles APIの設定を確認してください。", 6000);
+      }
+    } else if (S.terrainOn) {
       C.createOsmBuildingsAsync().then(t => v.scene.primitives.add(t)).catch(() => {});
     }
 
@@ -318,11 +339,7 @@
     $("#videoClose").addEventListener("click", closeVideo);
 
     // 取り込みモーダル
-    $("#btnImport").addEventListener("click", openImport);
-    $("#importClose").addEventListener("click", () => $("#importModal").classList.add("hidden"));
-    $("#importTheme").addEventListener("change", e => $("#newThemeFields").classList.toggle("hidden", e.target.value !== "__new__"));
-    $("#btnGenerate").addEventListener("click", generateSpots);
-    $("#btnSaveSpots").addEventListener("click", saveSpots);
+    bindImportUI();
 
     // Escで閉じる
     document.addEventListener("keydown", e => {
@@ -415,7 +432,7 @@
         position: C.Cartesian3.fromDegrees(sp.lng, sp.lat, 0),
         point: {
           pixelSize: 14, color: COLOR_PIN, outlineColor: C.Color.WHITE, outlineWidth: 2,
-          heightReference: S.terrainOn ? C.HeightReference.CLAMP_TO_GROUND : C.HeightReference.NONE,
+          heightReference: (S.terrainOn || S.photoreal) ? C.HeightReference.CLAMP_TO_GROUND : C.HeightReference.NONE,
           disableDepthTestDistance: Number.POSITIVE_INFINITY
         },
         label: {
@@ -425,7 +442,7 @@
           style: C.LabelStyle.FILL_AND_OUTLINE,
           showBackground: true, backgroundColor: C.Color.fromCssColorString("rgba(15,39,64,.75)"),
           pixelOffset: new C.Cartesian2(0, -24),
-          heightReference: S.terrainOn ? C.HeightReference.CLAMP_TO_GROUND : C.HeightReference.NONE,
+          heightReference: (S.terrainOn || S.photoreal) ? C.HeightReference.CLAMP_TO_GROUND : C.HeightReference.NONE,
           disableDepthTestDistance: Number.POSITIVE_INFINITY,
           scaleByDistance: new C.NearFarScalar(2e5, 1, 2e7, .65)
         }
@@ -478,21 +495,28 @@
 
   function flyOverview(duration = 2.5, higher = false) {
     const { lat, lng, h } = overviewPosition();
-    return flyP({
-      destination: C.Cartesian3.fromDegrees(lng, lat, higher ? h * 1.4 : h),
-      orientation: { heading: 0, pitch: toRad(-90), roll: 0 },
-      duration
-    });
+    // 真上からではなく、空から斜めに見渡す
+    return flySphereP(C.Cartesian3.fromDegrees(lng, lat, 0),
+      new C.HeadingPitchRange(0, toRad(-55), higher ? h * 1.5 : h * 1.15), { duration });
+  }
+
+  async function groundHeight(sp) {
+    const carto = C.Cartographic.fromDegrees(sp.lng, sp.lat);
+    const timeout = new Promise(r => setTimeout(() => r(null), 2500));
+    try {
+      let p = null;
+      if (S.photoreal) {
+        p = S.viewer.scene.sampleHeightMostDetailed([carto]).then(([c]) => (c && isFinite(c.height) ? c.height : null));
+      } else if (S.terrainOn) {
+        p = C.sampleTerrainMostDetailed(S.viewer.terrainProvider, [carto]).then(([c]) => c.height || 0);
+      }
+      if (p) { const h = await Promise.race([p, timeout]); return h == null ? 0 : h; }
+    } catch (e) { /* 取得失敗時は0m */ }
+    return 0;
   }
 
   async function spotView(sp) {
-    let ground = 0;
-    if (S.terrainOn) {
-      try {
-        const [c] = await C.sampleTerrainMostDetailed(S.viewer.terrainProvider, [C.Cartographic.fromDegrees(sp.lng, sp.lat)]);
-        ground = c.height || 0;
-      } catch (e) { /* 地形取得失敗時は0m */ }
-    }
+    const ground = await groundHeight(sp);
     const pitch = toRad(clamp(+sp.pitch || -25, -89, -5));
     const alt = Math.max(+sp.altitude || 400, 80);
     const range = alt / Math.sin(Math.abs(pitch));
@@ -541,7 +565,7 @@
     if (dive) {
       // 真上へ移動 → 急降下
       await flyP({
-        destination: C.Cartesian3.fromDegrees(sp.lng, sp.lat, 60000),
+        destination: C.Cartesian3.fromDegrees(sp.lng, sp.lat, 25000),
         orientation: { heading: view.offset.heading, pitch: toRad(-89), roll: 0 },
         duration: 3, easingFunction: C.EasingFunction.QUADRATIC_IN_OUT
       });
@@ -550,8 +574,8 @@
       const camPos = S.viewer.camera.positionWC;
       const dist = C.Cartesian3.distance(camPos, view.target);
       await flySphereP(view.target, view.offset, {
-        duration: clamp(3 + dist / 900000, 3.5, 9),
-        maximumHeight: clamp(dist * .35, 4000, 2.5e6),
+        duration: clamp(4 + dist / 800000, 4, 12),
+        maximumHeight: clamp(dist * .12, 2500, 300000),
         easingFunction: C.EasingFunction.QUADRATIC_IN_OUT
       });
     }
@@ -927,58 +951,289 @@
   }
 
   /* =========================================================
-   * Geminiによるスポット取り込み
+   * スポット取り込み（キーワード／名前リスト／CSV）
    * ========================================================= */
-  function openImport() {
-    $("#importTheme").innerHTML =
-      S.themes.map(t => `<option value="${esc(t.theme_id)}" ${t.theme_id === S.themeId ? "selected" : ""}>${esc(t.icon || "📍")} ${esc(t.theme_name)}</option>`).join("") +
-      `<option value="__new__">＋ 新しいテーマを作る</option>`;
-    $("#newThemeFields").classList.add("hidden");
-    $("#importPreview").innerHTML = "";
-    $("#btnSaveSpots").disabled = true;
-    S.importDraft = [];
-    $("#importModal").classList.remove("hidden");
+  const SPOT_FIELDS = ["name", "lat", "lng", "altitude", "heading", "pitch", "video_url", "eagle_comment", "tags"];
+  const HEADER_ALIASES = {
+    name: ["name", "spot", "スポット", "スポット名", "名前", "名称"],
+    lat: ["lat", "latitude", "緯度"],
+    lng: ["lng", "lon", "long", "longitude", "経度"],
+    altitude: ["altitude", "alt", "高度"],
+    heading: ["heading", "方位", "方位角"],
+    pitch: ["pitch", "傾斜", "傾斜角", "ピッチ"],
+    video_url: ["video_url", "video", "動画", "動画url", "映像", "映像url"],
+    eagle_comment: ["eagle_comment", "comment", "セリフ", "隊長のセリフ", "解説", "コメント"],
+    tags: ["tags", "tag", "タグ"]
+  };
+
+  function bindImportUI() {
+    $("#btnImport").addEventListener("click", openImport);
+    $("#importClose").addEventListener("click", () => $("#importModal").classList.add("hidden"));
+    $("#importTheme").addEventListener("change", e => {
+      $("#newThemeFields").classList.toggle("hidden", e.target.value !== "__new__");
+      if (S.importDraft.length) renderImportPreview();
+    });
+    $$(".imp-tab").forEach(t => t.addEventListener("click", () => switchImportMode(t.dataset.mode)));
+    $("#btnGenerate").addEventListener("click", generateSpots);
+    $("#importList").addEventListener("input", updateListCount);
+    $("#btnResolve").addEventListener("click", resolveList);
+    $("#btnParseCsv").addEventListener("click", parseCsvInput);
+    $("#btnCsvTemplate").addEventListener("click", async () => {
+      try { await navigator.clipboard.writeText($("#csvSample").textContent); showToast("ひな形をコピーしました"); }
+      catch (e) { showToast("コピーできませんでした。ひな形を選択してコピーしてください"); }
+    });
+    $("#csvFile").addEventListener("change", async e => {
+      const f = e.target.files[0];
+      if (!f) return;
+      $("#importCsv").value = await readTextFile(f);
+      e.target.value = "";
+      parseCsvInput();
+    });
+    $("#btnSaveSpots").addEventListener("click", saveSpots);
+    $("#importPreview").addEventListener("input", onPreviewEdit);
+    $("#importPreview").addEventListener("change", onPreviewEdit);
   }
 
+  function openImport() {
+    const sel = $("#importTheme").value || S.themeId;
+    $("#importTheme").innerHTML =
+      S.themes.map(t => `<option value="${esc(t.theme_id)}" ${t.theme_id === sel ? "selected" : ""}>${esc(t.icon || "📍")} ${esc(t.theme_name)}</option>`).join("") +
+      `<option value="__new__">＋ 新しいテーマを作る</option>`;
+    $("#newThemeFields").classList.toggle("hidden", $("#importTheme").value !== "__new__");
+    $("#importModal").classList.remove("hidden");
+    renderImportPreview();
+  }
+
+  function switchImportMode(mode) {
+    $$(".imp-tab").forEach(t => t.classList.toggle("active", t.dataset.mode === mode));
+    $$(".imp-panel").forEach(p => p.classList.toggle("hidden", p.dataset.mode !== mode));
+  }
+
+  /** 文字コード自動判定（UTF-8 → だめなら Shift_JIS：Excel保存のCSV対策） */
+  async function readTextFile(file) {
+    const buf = await file.arrayBuffer();
+    try { return new TextDecoder("utf-8", { fatal: true }).decode(buf); }
+    catch (e) { return new TextDecoder("shift_jis").decode(buf); }
+  }
+
+  const toHalf = v => String(v ?? "").replace(/[０-９．－，]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0)).trim();
+
+  /* ---------- ① キーワード ---------- */
   async function generateSpots() {
     const prompt = $("#importPrompt").value.trim();
     const count = clamp(parseInt($("#importCount").value, 10) || 5, 1, 10);
-    const sel = $("#importTheme").value;
-    if (!prompt) return showToast("取り込みたいスポットの内容を入力してください");
-    const themeName = sel === "__new__" ? $("#ntName").value.trim() : (S.themes.find(t => t.theme_id === sel) || {}).theme_name;
+    if (!prompt) return showToast("探したいスポットの内容を入力してください");
     showLoading("隊長が地図を広げて調査中…");
     try {
-      const res = await Api.call("generateSpots", { prompt, count, theme_name: themeName || "" });
-      S.importDraft = res.spots || [];
-      renderImportPreview();
+      const res = await Api.call("generateSpots", { prompt, count, theme_name: importThemeName() });
+      setDraft(res.spots || []);
     } catch (e) {
       showToast(e.message, 5000);
     } finally { hideLoading(); }
   }
 
+  /* ---------- ② 名前リスト ---------- */
+  function cleanListLines(text) {
+    const seen = new Set();
+    return String(text || "").split(/\r?\n/)
+      .map(l => l.replace(/^\s*(?:[0-9０-９]+\s*[.)．、:：）]|[（(][0-9０-９]+[)）]|[・\-*•●○◆◇★☆■□▶►※〇]|[①-⑳])\s*/, "").trim())
+      .filter(l => l && !seen.has(l) && seen.add(l))
+      .slice(0, 30);
+  }
+  function updateListCount() {
+    const n = cleanListLines($("#importList").value).length;
+    $("#listCount").textContent = n ? `${n}件` : "";
+  }
+  async function resolveList() {
+    const names = cleanListLines($("#importList").value);
+    if (!names.length) return showToast("スポット名を1行に1つずつ入力してください");
+    showLoading(`${names.length}件の位置を調べています…`);
+    try {
+      const res = await Api.call("generateSpots", { names, theme_name: importThemeName() });
+      const got = res.spots || [];
+      setDraft(got);
+      if (got.length < names.length) showToast(`${names.length - got.length}件は場所を特定できませんでした`, 4500);
+    } catch (e) {
+      showToast(e.message, 5000);
+    } finally { hideLoading(); }
+  }
+
+  /* ---------- ③ CSV・表 ---------- */
+  function parseDelimited(text) {
+    text = String(text || "").replace(/^\uFEFF/, "");
+    const firstLine = text.split(/\r?\n/)[0] || "";
+    const delim = firstLine.includes("\t") ? "\t" : ",";
+    const rows = [];
+    let row = [], field = "", q = false;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (q) {
+        if (ch === '"') { if (text[i + 1] === '"') { field += '"'; i++; } else q = false; }
+        else field += ch;
+      } else if (ch === '"' && field === "") q = true;
+      else if (ch === delim) { row.push(field); field = ""; }
+      else if (ch === "\n") { row.push(field); rows.push(row); row = []; field = ""; }
+      else if (ch !== "\r") field += ch;
+    }
+    if (field !== "" || row.length) { row.push(field); rows.push(row); }
+    return rows.filter(r => r.some(c => c.trim() !== ""));
+  }
+
+  function headerKey(h) {
+    const k = String(h || "").toLowerCase().replace(/[\s　]/g, "");
+    return Object.keys(HEADER_ALIASES).find(f => HEADER_ALIASES[f].includes(k)) || null;
+  }
+
+  async function parseCsvInput() {
+    const rows = parseDelimited($("#importCsv").value);
+    if (!rows.length) return showToast("CSVの内容を貼り付けてください");
+
+    let keys = rows[0].map(headerKey);
+    let body = rows.slice(1);
+    if (!keys.includes("name") && !keys.includes("lat")) { keys = SPOT_FIELDS.slice(); body = rows; } // 見出しなし
+    const lastIdx = keys.length - 1;
+
+    const list = body.map(r => {
+      // 列が多い場合（タグのカンマ等）は最後の列にまとめる
+      if (r.length > keys.length) r = r.slice(0, lastIdx).concat(r.slice(lastIdx).join(","));
+      const o = {};
+      keys.forEach((k, i) => { if (k) o[k] = (r[i] ?? "").trim(); });
+      ["lat", "lng", "altitude", "heading", "pitch"].forEach(k => { if (o[k] !== undefined && o[k] !== "") o[k] = Number(toHalf(o[k])); });
+      return o;
+    }).filter(o => o.name || o.lat);
+
+    if (!list.length) return showToast("読み込めるスポットがありませんでした。見出し（name, lat, lng）を確認してください", 5000);
+
+    // セリフが空欄ならAIで作る
+    const missing = list.filter(o => o.name && !o.eagle_comment);
+    if ($("#csvAiComment").checked && missing.length) {
+      let done = 0;
+      showLoading(`隊長のセリフを作成中… 0/${missing.length}`);
+      const theme_name = importThemeName();
+      const queue = missing.slice(0, 30);
+      const worker = async () => {
+        while (queue.length) {
+          const o = queue.shift();
+          try {
+            const r = await Api.call("explain", { name: o.name, tags: o.tags || "", theme_name });
+            o.eagle_comment = r.comment;
+          } catch (e) { /* 空欄のまま（到着時に自動生成） */ }
+          $("#loadingText").textContent = `隊長のセリフを作成中… ${++done}/${missing.length}`;
+        }
+      };
+      await Promise.all([worker(), worker(), worker()]);
+      hideLoading();
+    }
+    setDraft(list);
+  }
+
+  /* ---------- プレビュー（編集可能な表） ---------- */
+  function importThemeName() {
+    const sel = $("#importTheme").value;
+    return sel === "__new__" ? $("#ntName").value.trim() : ((S.themes.find(t => t.theme_id === sel) || {}).theme_name || "");
+  }
+
+  function validateDraft(s) {
+    if (!String(s.name || "").trim()) return "名前がありません";
+    if (s.lat === "" || s.lat == null || !isFinite(s.lat) || Math.abs(s.lat) > 90) return "緯度が正しくありません";
+    if (s.lng === "" || s.lng == null || !isFinite(s.lng) || Math.abs(s.lng) > 180) return "経度が正しくありません";
+    return "";
+  }
+
+  function existingNames() {
+    const sel = $("#importTheme").value;
+    return new Set((S.spotsCache[sel] || []).map(p => p.name));
+  }
+
+  function setDraft(list) {
+    const exist = existingNames();
+    S.importDraft = list.map(s => {
+      const d = {
+        name: String(s.name || "").trim(),
+        lat: s.lat === "" || s.lat == null ? "" : Number(s.lat),
+        lng: s.lng === "" || s.lng == null ? "" : Number(s.lng),
+        altitude: s.altitude ?? "", heading: s.heading ?? "", pitch: s.pitch ?? "",
+        video_url: s.video_url || "", eagle_comment: s.eagle_comment || "", tags: s.tags || ""
+      };
+      d._err = validateDraft(d);
+      d._dup = exist.has(d.name);
+      d._chk = !d._err && !d._dup;
+      return d;
+    });
+    renderImportPreview();
+  }
+
   function renderImportPreview() {
     const list = S.importDraft;
-    if (!list.length) { $("#importPreview").innerHTML = `<p class="muted">スポットが見つかりませんでした。言い回しを変えてお試しください。</p>`; return; }
+    $("#importNote").classList.toggle("hidden", !list.length);
+    if (!list.length) {
+      $("#importPreview").innerHTML = "";
+      updateSaveCount();
+      return;
+    }
+    const exist = existingNames();
+    list.forEach(d => { d._dup = exist.has(d.name); });
     $("#importPreview").innerHTML = `
       <table>
-        <thead><tr><th>保存</th><th>名前</th><th>緯度, 経度</th><th>高度/方位/傾斜</th><th>タグ</th><th>隊長のセリフ</th></tr></thead>
-        <tbody>${list.map((s, i) => `
-          <tr>
-            <td><input type="checkbox" class="imp-chk" data-i="${i}" checked aria-label="${esc(s.name)}を保存"></td>
-            <td><b>${esc(s.name)}</b></td>
-            <td class="num"><a href="https://www.google.com/maps?q=${s.lat},${s.lng}" target="_blank" rel="noopener">${(+s.lat).toFixed(4)}, ${(+s.lng).toFixed(4)}</a></td>
-            <td class="num">${s.altitude}m / ${s.heading}° / ${s.pitch}°</td>
-            <td>${esc(s.tags)}</td>
-            <td class="cmt">${esc(s.eagle_comment)}</td>
+        <thead><tr><th>保存</th><th>名前</th><th>緯度</th><th>経度</th><th>位置</th><th>隊長のセリフ</th><th>タグ</th></tr></thead>
+        <tbody>${list.map((d, i) => `
+          <tr data-i="${i}" class="${d._err ? "invalid" : ""}">
+            <td><input type="checkbox" class="imp-chk" data-i="${i}" ${d._chk ? "checked" : ""} aria-label="${esc(d.name)}を保存"></td>
+            <td><input type="text" data-i="${i}" data-k="name" value="${esc(d.name)}"></td>
+            <td><input type="number" step="any" class="num-in" data-i="${i}" data-k="lat" value="${esc(d.lat)}"></td>
+            <td><input type="number" step="any" class="num-in" data-i="${i}" data-k="lng" value="${esc(d.lng)}"></td>
+            <td>
+              <a class="map-link" data-i="${i}" href="${mapLink(d)}" target="_blank" rel="noopener">地図で確認</a>
+              <div class="row-err" data-i="${i}">${esc(d._err || (d._dup ? "登録済み" : ""))}</div>
+            </td>
+            <td><textarea rows="2" data-i="${i}" data-k="eagle_comment" placeholder="空欄なら到着時にAIが作成">${esc(d.eagle_comment)}</textarea></td>
+            <td><input type="text" data-i="${i}" data-k="tags" value="${esc(d.tags)}"></td>
           </tr>`).join("")}
         </tbody>
       </table>`;
-    $("#btnSaveSpots").disabled = false;
+    updateSaveCount();
+  }
+
+  function mapLink(d) {
+    return isFinite(d.lat) && isFinite(d.lng) && d.lat !== "" && d.lng !== ""
+      ? `https://www.google.com/maps?q=${d.lat},${d.lng}` : `https://www.google.com/maps/search/${encodeURIComponent(d.name)}`;
+  }
+
+  function onPreviewEdit(e) {
+    const el = e.target, i = +el.dataset.i;
+    const d = S.importDraft[i];
+    if (!d) return;
+    if (el.classList.contains("imp-chk")) {
+      d._chk = el.checked;
+    } else if (el.dataset.k) {
+      const k = el.dataset.k;
+      d[k] = (k === "lat" || k === "lng") ? (el.value === "" ? "" : Number(toHalf(el.value))) : el.value;
+      d._err = validateDraft(d);
+      const tr = el.closest("tr");
+      tr.classList.toggle("invalid", !!d._err);
+      $(`.map-link[data-i="${i}"]`).href = mapLink(d);
+      $(`.row-err[data-i="${i}"]`).textContent = d._err || (existingNames().has(d.name) ? "登録済み" : "");
+    }
+    updateSaveCount();
+  }
+
+  function updateSaveCount() {
+    const n = S.importDraft.filter(d => d._chk).length;
+    $("#saveCount").textContent = S.importDraft.length ? `${S.importDraft.length}件中 ${n}件を保存` : "";
+    $("#btnSaveSpots").disabled = n === 0;
   }
 
   async function saveSpots() {
-    const chosen = $$(".imp-chk").filter(c => c.checked).map(c => S.importDraft[+c.dataset.i]);
+    const chosen = S.importDraft.filter(d => d._chk);
     if (!chosen.length) return showToast("保存するスポットにチェックを入れてください");
+    const bad = chosen.find(d => d._err);
+    if (bad) return showToast(`「${bad.name || "名前なし"}」：${bad._err}`, 4500);
+    const payload = chosen.map(d => {
+      const o = {};
+      SPOT_FIELDS.forEach(k => { o[k] = d[k]; });
+      return o;
+    });
+
     let themeId = $("#importTheme").value;
     showLoading("スプレッドシートに保存中…");
     try {
@@ -990,15 +1245,17 @@
           hideLoading();
           return showToast("テーマ名と、半角小文字英数・_ のテーマIDを入力してください", 4000);
         }
-        const avg = (k) => chosen.reduce((s, p) => s + (+p[k]), 0) / chosen.length;
+        const avg = k => payload.reduce((sum, p) => sum + (+p[k]), 0) / payload.length;
         const r = await Api.call("saveTheme", { theme: { theme_id, theme_name, icon, default_center: `${avg("lat").toFixed(4)},${avg("lng").toFixed(4)},6` } });
         S.themes.push(r.theme);
         renderThemeTabs();
         themeId = theme_id;
       }
-      const res = await Api.call("saveSpots", { theme_id: themeId, spots: chosen });
+      const res = await Api.call("saveSpots", { theme_id: themeId, spots: payload });
       hideLoading();
-      showToast(`${res.saved}件を保存しました${res.skipped ? `（重複${res.skipped}件はスキップ）` : ""}`, 4000);
+      showToast(`${res.saved}件を保存しました${res.skipped ? `（登録済み${res.skipped}件はスキップ）` : ""}`, 4000);
+      S.importDraft = [];
+      renderImportPreview();
       $("#importModal").classList.add("hidden");
       await selectTheme(themeId, false, true);
     } catch (e) {

@@ -143,32 +143,71 @@ body.flying #windStreaks { opacity: 1; animation: streak .5s linear infinite; }
 .mode-quiz { background: var(--brass); color: var(--navy); }
 .mode-home { background: transparent; border: 1px solid rgba(255,255,255,.35); }
 
-/* ---------- イーグル隊長 ---------- */
+/* ---------- イーグル隊長（画面中央を飛ぶ） ---------- */
 .captain {
-  position: fixed; z-index: 16; left: 14px;
-  bottom: calc(92px + var(--safe-b));
-  display: flex; align-items: flex-end; gap: 10px;
-  max-width: min(560px, calc(100vw - 28px));
+  position: fixed; z-index: 16; top: calc(78px + var(--safe-t)); left: 50%;
+  transform: translateX(-50%);
+  display: flex; align-items: flex-start; gap: 0;
+  width: max-content; max-width: calc(100vw - 20px);
   pointer-events: none;
+  transition: left .5s ease;
 }
-.captain-avatar {
-  flex: none; width: 70px; height: 70px; border-radius: 50%;
-  display: grid; place-items: center; font-size: 42px;
-  background: radial-gradient(circle at 35% 30%, var(--brass-2), var(--brass) 60%, #a57618);
-  border: 3px solid var(--paper); box-shadow: 0 6px 18px rgba(0,0,0,.4);
+body.card-open .captain { left: calc(50% - 190px); }
+.eagle {
+  flex: none; width: 230px;
+  filter: drop-shadow(0 22px 16px rgba(0,0,0,.35));
+  animation: hover 3.2s ease-in-out infinite alternate;
 }
-.captain.talking .captain-avatar { animation: bob .35s ease-in-out infinite alternate; }
-@keyframes bob { from { transform: translateY(0) rotate(-4deg); } to { transform: translateY(-4px) rotate(4deg); } }
+.eagle-svg { display: block; width: 100%; height: auto; overflow: visible; }
+@keyframes hover { from { transform: translateY(0) rotate(-2deg); } to { transform: translateY(-12px) rotate(2deg); } }
+.wing { transform-origin: 0 0; animation: flap 1.5s ease-in-out infinite; }
+@keyframes flap { 0%, 100% { transform: rotate(10deg); } 50% { transform: rotate(-16deg); } }
+.scarf-tail { transform-origin: 170px 106px; animation: flutter .5s ease-in-out infinite alternate; }
+@keyframes flutter { from { transform: rotate(-6deg) scaleX(.9); } to { transform: rotate(5deg) scaleX(1.08); } }
+/* 飛行中：羽ばたきが速くなり、少し前傾 */
+body.flying .wing { animation-duration: .45s; }
+body.flying .scarf-tail { animation-duration: .18s; }
+body.flying .eagle { animation: rush .6s ease-in-out infinite alternate; }
+@keyframes rush { from { transform: translateY(0) rotate(-6deg); } to { transform: translateY(-6px) rotate(-3deg); } }
+/* 話している間はくちばしが動く */
+.beak { transform-origin: 150px 98px; }
+.captain.talking .beak { animation: talk .22s ease-in-out infinite alternate; }
+@keyframes talk { from { transform: scaleY(1); } to { transform: scaleY(1.25); } }
+
 .captain-bubble {
   position: relative; pointer-events: auto;
+  margin: 26px 0 0 -10px; max-width: 380px;
   background: var(--paper); color: var(--ink);
-  padding: 10px 16px 12px; border-radius: 16px 16px 16px 4px;
+  padding: 10px 16px 12px; border-radius: 16px;
   border: 3px solid var(--ink);
   box-shadow: 5px 5px 0 rgba(15,39,64,.55);
 }
+.captain-bubble::before {
+  content: ""; position: absolute; left: -14px; top: 18px;
+  border: 8px solid transparent; border-right: 12px solid var(--ink);
+}
 .captain-name { font-size: 11px; font-weight: 800; color: var(--signal); }
 .captain-bubble p {
-  margin: 2px 0 0; font-family: var(--font-shout); font-size: 19px; line-height: 1.5;
+  margin: 2px 0 0; font-family: var(--font-shout); font-size: 18px; line-height: 1.5;
+}
+
+/* 飛行中に流れる雲 */
+#clouds { position: fixed; inset: 0; z-index: 5; pointer-events: none; overflow: hidden; opacity: 0; transition: opacity .8s; }
+body.flying #clouds { opacity: 1; }
+#clouds span {
+  position: absolute; width: 55vw; height: 32vh; left: 0; top: 0;
+  background: radial-gradient(ellipse at center, rgba(255,255,255,.75), rgba(255,255,255,.35) 40%, rgba(255,255,255,0) 68%);
+  filter: blur(8px);
+  animation: cloudpass 2.6s linear infinite;
+}
+#clouds span:nth-child(1) { top: 5vh; animation-delay: 0s; }
+#clouds span:nth-child(2) { top: 40vh; animation-delay: .7s; }
+#clouds span:nth-child(3) { top: 20vh; animation-delay: 1.4s; }
+#clouds span:nth-child(4) { top: 55vh; animation-delay: 2s; }
+@keyframes cloudpass {
+  0%   { transform: translate(85vw, -10vh) scale(.5); opacity: 0; }
+  20%  { opacity: 1; }
+  100% { transform: translate(-70vw, 25vh) scale(2); opacity: 0; }
 }
 
 /* ---------- 気流ガチャ ---------- */
@@ -334,6 +373,30 @@ body.flying #windStreaks { opacity: 1; animation: streak .5s linear infinite; }
 .import-preview td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .import-preview td.cmt { min-width: 220px; }
 
+/* 取り込み方法タブ */
+.imp-tabs { display: flex; gap: 4px; margin: 4px 0 12px; border-bottom: 2px solid var(--ink); }
+.imp-tab {
+  flex: 1; padding: 9px 6px; border: 0; border-radius: 8px 8px 0 0;
+  background: var(--paper-2); color: var(--ink); font-weight: 700; font-size: 13.5px;
+}
+.imp-tab.active { background: var(--ink); color: var(--paper); }
+.imp-panel { margin-bottom: 8px; }
+.modal-actions-left { justify-content: space-between; align-items: center; margin-top: 0; }
+.csv-sample {
+  margin: 0 0 8px; padding: 8px 10px; overflow-x: auto; white-space: pre;
+  font-size: 12px; line-height: 1.6; background: var(--white); border: 1px dashed #b9ad8f; border-radius: var(--radius-s);
+}
+.file-chip { display: inline-flex; align-items: center; }
+.check-inline { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 700; }
+.import-preview input[type="text"], .import-preview input[type="number"], .import-preview textarea {
+  width: 100%; padding: 5px 6px; border: 1px solid #c9bd9f; border-radius: 4px; background: var(--white); color: var(--ink); font-size: 13px;
+}
+.import-preview input.num-in { width: 92px; }
+.import-preview textarea { min-width: 220px; resize: vertical; }
+.import-preview tr.invalid td { background: #f7e0da; }
+.import-preview .map-link { font-size: 12px; white-space: nowrap; }
+.import-preview .row-err { font-size: 11px; color: var(--signal); font-weight: 700; }
+
 /* クイズ */
 .quiz-q { font-family: var(--font-shout); font-size: 20px; line-height: 1.55; margin: 0 0 16px; }
 .quiz-opts { display: grid; gap: 10px; }
@@ -414,14 +477,20 @@ body.flying #windStreaks { opacity: 1; animation: streak .5s linear infinite; }
   .brand-title { display: none; }
 }
 @media (max-width: 700px) {
+  .import-label { display: none; }
+  .import-btn { width: 38px; padding: 0; justify-content: center; }
+  .imp-tab { font-size: 12px; }
   .hud { top: calc(62px + var(--safe-t)); left: 8px; min-width: 0; padding: 6px 10px; }
   .hud-row { font-size: 11.5px; line-height: 1.55; }
   .hud-target { display: none; }
   .mode-panel { left: 8px; right: 8px; transform: none; border-radius: 16px; gap: 6px; padding: 6px; }
   .mode-btn { flex: 1; flex-direction: column; gap: 2px; padding: 8px 4px; border-radius: 12px; font-size: 11.5px; }
   .mode-ico { font-size: 22px; }
-  .captain { left: 8px; bottom: calc(96px + var(--safe-b)); }
-  .captain-avatar { width: 52px; height: 52px; font-size: 30px; }
+  .captain { top: calc(60px + var(--safe-t)); flex-direction: column; align-items: center; }
+  body.card-open .captain { left: 50%; }
+  .eagle { width: 150px; }
+  .captain-bubble { margin: -6px 0 0; max-width: 88vw; }
+  .captain-bubble::before { left: 50%; top: -18px; margin-left: -8px; border: 8px solid transparent; border-bottom: 12px solid var(--ink); }
   .captain-bubble p { font-size: 15px; }
   .spot-card {
     left: 0; right: 0; top: auto; bottom: 0; width: auto;
@@ -430,7 +499,6 @@ body.flying #windStreaks { opacity: 1; animation: streak .5s linear infinite; }
     padding-bottom: var(--safe-b);
     animation: sheetIn .3s ease-out;
   }
-  body.card-open .captain { bottom: calc(62vh + 10px); }
   body.card-open .mode-panel { display: none; }
   .wind-gacha { flex-direction: column; gap: 12px; padding: 18px; }
   .compass { width: 120px; height: 120px; }

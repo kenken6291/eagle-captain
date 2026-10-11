@@ -15,13 +15,14 @@
   <link href="https://cdn.jsdelivr.net/npm/cesium@1.121.0/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/cesium@1.121.0/Build/Cesium/Cesium.js"></script>
 
-  <link rel="stylesheet" href="style.css?v=1.0.2">
+  <link rel="stylesheet" href="style.css?v=1.2.0">
 </head>
 <body>
 
   <!-- ===== 地図（3D地球） ===== -->
   <div id="cesiumContainer"></div>
   <div id="windStreaks" aria-hidden="true"></div>
+  <div id="clouds" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
 
   <!-- ===== 上部バー：タイトル・テーマ切替・ユーザー ===== -->
   <header class="topbar">
@@ -38,7 +39,7 @@
 
     <div class="user-area">
       <button id="btnMute" class="icon-btn" title="音声のオン/オフ" aria-label="音声のオン/オフ">🔊</button>
-      <button id="btnImport" class="icon-btn" title="スポットを取り込む" aria-label="スポットを取り込む">＋</button>
+      <button id="btnImport" class="import-btn" title="スポットを取り込む"><span aria-hidden="true">＋</span><span class="import-label">スポット取込</span></button>
       <div class="user-menu">
         <button id="btnUser" class="user-chip" aria-haspopup="true" aria-expanded="false">
           <span aria-hidden="true">🧑‍✈️</span><span id="userName">搭乗者</span>
@@ -81,7 +82,46 @@
 
   <!-- ===== イーグル隊長（吹き出し） ===== -->
   <div id="captain" class="captain" aria-live="polite">
-    <div class="captain-avatar" aria-hidden="true">🦅</div>
+    <!-- 空を飛ぶイーグル隊長（ユーザーはこの足につかまって飛ぶ） -->
+    <div class="eagle" aria-hidden="true">
+      <svg class="eagle-svg" viewBox="0 0 300 250" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <g id="wingShape">
+            <path d="M0 -8 C-24 -38 -70 -52 -118 -46 L-104 -34 L-128 -28 L-108 -18 L-130 -8 L-108 -2 L-124 10 L-100 10 L-110 24 L-86 20 L-90 34 L-66 24 C-42 26 -18 18 0 14 Z"
+                  fill="#7a4a22" stroke="#4e2e12" stroke-width="3" stroke-linejoin="round"/>
+            <path d="M-28 -14 L-96 -30 M-28 -4 L-102 -10 M-28 6 L-94 12 M-26 12 L-74 24"
+                  stroke="#4e2e12" stroke-width="2.5" stroke-linecap="round" fill="none" opacity=".7"/>
+          </g>
+        </defs>
+        <!-- 翼 -->
+        <g transform="translate(126 118)"><g class="wing"><use href="#wingShape"/></g></g>
+        <g transform="translate(174 118) scale(-1 1)"><g class="wing"><use href="#wingShape"/></g></g>
+        <!-- 足 -->
+        <g stroke="#e8a317" stroke-linecap="round" fill="none">
+          <path d="M138 176 L134 212 M162 176 L166 212" stroke-width="7"/>
+          <path d="M134 212 l-10 8 M134 212 l0 12 M134 212 l9 8 M166 212 l-9 8 M166 212 l0 12 M166 212 l10 8" stroke-width="4"/>
+        </g>
+        <!-- 胴体 -->
+        <ellipse cx="150" cy="140" rx="36" ry="46" fill="#8b5a2b" stroke="#4e2e12" stroke-width="3"/>
+        <ellipse cx="150" cy="150" rx="22" ry="30" fill="#a8743f"/>
+        <!-- なびくマフラー -->
+        <path class="scarf-tail" d="M170 106 q30 6 54 -6 q-6 15 -22 20 q12 2 24 -3 q-16 18 -56 0 z" fill="#d7262b" stroke="#8e1418" stroke-width="2"/>
+        <!-- 頭 -->
+        <circle cx="150" cy="82" r="30" fill="#ffffff" stroke="#4e2e12" stroke-width="3"/>
+        <!-- マフラー -->
+        <path d="M120 102 q30 16 60 0 l2 10 q-32 18 -64 0 z" fill="#d7262b" stroke="#8e1418" stroke-width="2"/>
+        <!-- ゴーグル -->
+        <path d="M121 68 q29 -10 58 0" stroke="#5a3a1a" stroke-width="5" fill="none"/>
+        <circle cx="138" cy="67" r="11" fill="#bfe3f2" stroke="#7a5a2a" stroke-width="4"/>
+        <circle cx="162" cy="67" r="11" fill="#bfe3f2" stroke="#7a5a2a" stroke-width="4"/>
+        <circle cx="134" cy="63" r="3" fill="#ffffff"/><circle cx="158" cy="63" r="3" fill="#ffffff"/>
+        <!-- 眉と目 -->
+        <path d="M128 85 l14 4 M172 85 l-14 4" stroke="#1e2a36" stroke-width="3.5" stroke-linecap="round"/>
+        <circle cx="140" cy="93" r="3.5" fill="#1e2a36"/><circle cx="160" cy="93" r="3.5" fill="#1e2a36"/>
+        <!-- くちばし -->
+        <path class="beak" d="M141 98 L159 98 L150 117 Z" fill="#f2a516" stroke="#a86a00" stroke-width="2" stroke-linejoin="round"/>
+      </svg>
+    </div>
     <div class="captain-bubble hidden" id="captainBubble">
       <div class="captain-name">イーグル隊長</div>
       <p id="captainText"></p>
@@ -134,13 +174,13 @@
   <div id="importModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="importTitle">
     <div class="modal-box import-box">
       <button class="modal-x" id="importClose" aria-label="閉じる">×</button>
-      <h2 id="importTitle" class="modal-title">スポットをAIで取り込む</h2>
+      <h2 id="importTitle" class="modal-title">スポットを取り込む</h2>
 
+      <!-- 保存先 -->
       <div class="form-row">
         <label for="importTheme">保存先のテーマ</label>
         <select id="importTheme"></select>
       </div>
-
       <div id="newThemeFields" class="new-theme hidden">
         <div class="form-row">
           <label for="ntName">新しいテーマ名</label>
@@ -148,7 +188,7 @@
         </div>
         <div class="form-grid">
           <div class="form-row">
-            <label for="ntId">テーマID（半角英数と_）</label>
+            <label for="ntId">テーマID（半角小文字英数と_）</label>
             <input id="ntId" type="text" placeholder="kyoto_temples">
           </div>
           <div class="form-row">
@@ -158,24 +198,68 @@
         </div>
       </div>
 
-      <div class="form-row">
-        <label for="importPrompt">どんなスポットを取り込みますか</label>
-        <textarea id="importPrompt" rows="3" placeholder="例：近畿地方の名城 5選 ／ 京都の有名寺社 ／ ヨーロッパの古城"></textarea>
+      <!-- 取り込み方法 -->
+      <div class="imp-tabs" role="tablist" aria-label="取り込み方法">
+        <button class="imp-tab active" data-mode="keyword" role="tab">キーワードで探す</button>
+        <button class="imp-tab" data-mode="list" role="tab">名前リストを貼る</button>
+        <button class="imp-tab" data-mode="csv" role="tab">CSV・表を貼る</button>
       </div>
-      <div class="form-grid">
+
+      <!-- ① キーワード -->
+      <div class="imp-panel" data-mode="keyword">
         <div class="form-row">
-          <label for="importCount">件数</label>
-          <input id="importCount" type="number" min="1" max="10" value="5">
+          <label for="importPrompt">どんなスポットを探しますか</label>
+          <textarea id="importPrompt" rows="3" placeholder="例：近畿地方の名城 5選 ／ 京都の有名寺社 ／ ヨーロッパの古城"></textarea>
         </div>
-        <div class="form-row form-row-btn">
-          <button id="btnGenerate" class="btn btn-primary">AIでリストを作る</button>
+        <div class="form-grid">
+          <div class="form-row">
+            <label for="importCount">件数（1〜10）</label>
+            <input id="importCount" type="number" min="1" max="10" value="5">
+          </div>
+          <div class="form-row form-row-btn">
+            <button id="btnGenerate" class="btn btn-primary">AIでリストを作る</button>
+          </div>
         </div>
       </div>
 
+      <!-- ② 名前リスト -->
+      <div class="imp-panel hidden" data-mode="list">
+        <div class="form-row">
+          <label for="importList">スポット名を1行に1つ（30件まで）</label>
+          <textarea id="importList" rows="7" placeholder="姫路城&#10;松本城&#10;熊本城（熊本市）&#10;二条城 京都"></textarea>
+        </div>
+        <p class="hint">Webサイトやメモからコピーしたリストをそのまま貼れます。番号や記号（1. ・ - ★）は自動で取り除きます。同じ名前が多い場所は地域名を添えると正確になります。</p>
+        <div class="modal-actions modal-actions-left">
+          <span id="listCount" class="muted"></span>
+          <button id="btnResolve" class="btn btn-primary">AIで位置とセリフを付ける</button>
+        </div>
+      </div>
+
+      <!-- ③ CSV -->
+      <div class="imp-panel hidden" data-mode="csv">
+        <p class="hint">1行目に見出しを入れてください。必須は <b>name, lat, lng</b>（名前・緯度・経度）だけです。スプレッドシートの範囲をコピーして貼っても読み込めます。</p>
+        <pre class="csv-sample" id="csvSample">name,lat,lng,altitude,heading,pitch,video_url,eagle_comment,tags
+姫路城,34.8394,134.6939,350,330,-25,,白鷺城とも呼ばれる名城だ！,"国宝,兵庫"</pre>
+        <div class="card-actions">
+          <button id="btnCsvTemplate" class="chip-btn" type="button">ひな形をコピー</button>
+          <label class="chip-btn file-chip">CSVファイルを選ぶ<input id="csvFile" type="file" accept=".csv,.tsv,.txt,text/csv" hidden></label>
+        </div>
+        <div class="form-row">
+          <label for="importCsv">CSV・表の内容</label>
+          <textarea id="importCsv" rows="7" placeholder="ここに貼り付け"></textarea>
+        </div>
+        <div class="modal-actions modal-actions-left">
+          <label class="check-inline"><input type="checkbox" id="csvAiComment" checked> セリフが空欄ならAIで作る</label>
+          <button id="btnParseCsv" class="btn btn-primary">プレビューする</button>
+        </div>
+      </div>
+
+      <!-- プレビュー -->
       <div id="importPreview" class="import-preview"></div>
-      <p class="hint">AIが作った緯度・経度は誤っていることがあります。保存前に地図リンクで位置を確認してください。</p>
+      <p id="importNote" class="hint hidden">緯度・経度・セリフはこの表で直接直せます。地図リンクで位置を確かめてから保存してください。</p>
 
       <div class="modal-actions">
+        <span id="saveCount" class="muted"></span>
         <button id="btnSaveSpots" class="btn btn-primary" disabled>チェックしたスポットを保存</button>
       </div>
     </div>
@@ -280,8 +364,8 @@
   <div id="toast" class="toast" role="status"></div>
   <div id="versionBadge" class="version-badge"></div>
 
-  <script src="config.js?v=1.0.2"></script>
-  <script src="auth.js?v=1.0.2"></script>
-  <script src="app.js?v=1.0.2"></script>
+  <script src="config.js?v=1.2.0"></script>
+  <script src="auth.js?v=1.2.0"></script>
+  <script src="app.js?v=1.2.0"></script>
 </body>
 </html>
