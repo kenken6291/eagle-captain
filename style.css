@@ -379,6 +379,8 @@ body.flying #windStreaks { opacity: 1; animation: streak .5s linear infinite; }
 .auth-form { background: var(--paper); color: var(--ink); padding: 20px; border-radius: 0 0 var(--radius-m) var(--radius-m); }
 .auth-msg { min-height: 1.5em; margin: 10px 0 0; font-size: 14px; font-weight: 700; color: var(--brass-2); text-align: center; }
 .pw-box .auth-msg { color: var(--signal); }
+/* パスワード変更モーダルは認証ゲート(60)より前面に出す */
+#pwModal { z-index: 65; }
 .auth-version { margin: 14px 0 0; text-align: center; font-size: 12px; color: rgba(241,234,216,.7); font-variant-numeric: tabular-nums; }
 
 /* ---------- 共通 ---------- */

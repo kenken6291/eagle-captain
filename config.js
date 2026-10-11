@@ -14,7 +14,7 @@ const APP_CONFIG = {
   //       空のままでも航空写真（Esri World Imagery）で動作します。
   CESIUM_ION_TOKEN: "",
 
-  VERSION: "v1.0.1",
+  VERSION: "v1.0.2",
   APP_TITLE: "あの場所は今_イーグル隊長の空中散歩",
   DEBUG_MODE: false,
 

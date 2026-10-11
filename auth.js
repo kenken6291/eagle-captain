@@ -140,7 +140,7 @@ const Auth = {
 
   async login() {
     const email = $("#loginEmail").value.trim().toLowerCase();
-    const password = $("#loginPw").value;
+    const password = $("#loginPw").value.trim(); // メールからのコピー時の空白・改行を除去
     if (!this.validEmail(email) || !password) return this.msg("メールアドレスとパスワードを入力してください");
     showLoading("搭乗手続き中…");
     try {
@@ -149,6 +149,7 @@ const Auth = {
       this.user = res.user;
       this._lastLoginPw = password;
       $("#loginPw").value = "";
+      this.msg("");
       if (res.mustChange) this.openPwModal(true);
       else this.enter();
     } catch (e) {
@@ -207,7 +208,7 @@ const Auth = {
   },
 
   async changePassword() {
-    const current = $("#pwCurrent").value;
+    const current = $("#pwCurrent").value.trim();
     const pw = $("#pwNew").value, pw2 = $("#pwNew2").value;
     const m = $("#pwMsg");
     if (!current) return (m.textContent = "現在のパスワード（仮パスワード）を入力してください");
