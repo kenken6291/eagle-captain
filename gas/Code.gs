@@ -11,6 +11,7 @@
  *   TTS_MODEL      : 任意  既定 gemini-2.5-flash-preview-tts
  *   TTS_VOICE      : 任意  既定 Orus（低めで張りのある男性系）
  *   SPREADSHEET_ID : 任意  スタンドアロンGASの場合のみ
+ *   ADMIN_EMAILS   : 推奨  管理者のメールアドレス（カンマ区切り）。全カテゴリ・全スポットを編集／削除可能
  *   TTS_FOLDER_ID  : 自動  TTSキャッシュ用Driveフォルダ（初回自動作成）
  * =========================================================
  */
@@ -18,8 +19,8 @@
 const SHEETS = { USERS: "Users", THEMES: "Themes", SPOTS: "Spots", SESSIONS: "Sessions" };
 const HEADERS = {
   Users: ["user_id", "email", "display_name", "password_hash", "status", "created_at", "last_login_at"],
-  Themes: ["theme_id", "theme_name", "icon", "default_center"],
-  Spots: ["spot_id", "theme_id", "name", "lat", "lng", "altitude", "heading", "pitch", "video_url", "eagle_comment", "tags"],
+  Themes: ["theme_id", "theme_name", "icon", "default_center", "created_by"],
+  Spots: ["spot_id", "theme_id", "name", "lat", "lng", "altitude", "heading", "pitch", "video_url", "eagle_comment", "tags", "created_by", "import_batch"],
   Sessions: ["token_hash", "user_id", "created_at", "expires_at"]
 };
 const TZ = "Asia/Tokyo";
@@ -72,6 +73,10 @@ function doPost(e) {
 
     const actions = {
       getThemes: getThemes_,
+      updateTheme: updateTheme_,
+      deleteTheme: deleteTheme_,
+      getManageData: getManageData_,
+      deleteSpots: deleteSpots_,
       getSpots: getSpots_,
       saveTheme: saveTheme_,
       saveSpots: saveSpots_,
@@ -100,6 +105,7 @@ function setup() {
       sh.getRange(1, 1, 1, HEADERS[name].length).setValues([HEADERS[name]]).setFontWeight("bold");
       sh.setFrozenRows(1);
     }
+    ensureHeaders_(name);
   });
   // 緯度経度などを文字列化させない
   ss.getSheetByName(SHEETS.SPOTS).getRange("D:H").setNumberFormat("0.######");
@@ -291,14 +297,26 @@ function findUser_(pred) {
   return null;
 }
 function publicUser_(u) {
-  return { user_id: u.user_id, email: u.email, display_name: u.display_name, status: u.status };
+  return { user_id: u.user_id, email: u.email, display_name: u.display_name, status: u.status, is_admin: isAdmin_(u) };
+}
+function isAdmin_(u) {
+  const list = prop_("ADMIN_EMAILS").toLowerCase().split(",").map(x => x.trim()).filter(x => x);
+  return !!u && list.indexOf(String(u.email).toLowerCase()) >= 0;
+}
+/** 管理者、または作成者本人なら編集可 */
+function canEdit_(user, createdBy) {
+  return isAdmin_(user) || (!!createdBy && createdBy === user.user_id);
 }
 
 /* =========================================================
  * テーマ・スポット
  * ========================================================= */
-function getThemes_() {
-  return { ok: true, themes: rows_(SHEETS.THEMES).filter(t => t.theme_id) };
+function getThemes_(req, user) {
+  const themes = rows_(SHEETS.THEMES).filter(t => t.theme_id).map(t => ({
+    theme_id: t.theme_id, theme_name: t.theme_name, icon: t.icon, default_center: t.default_center,
+    can_edit: canEdit_(user, t.created_by)
+  }));
+  return { ok: true, themes: themes };
 }
 
 function getSpots_(req) {
@@ -310,48 +328,152 @@ function getSpots_(req) {
   return { ok: true, spots: spots };
 }
 
-function saveTheme_(req) {
+function saveTheme_(req, user) {
   const t = req.theme || {};
-  const id = String(t.theme_id || "").trim();
+  let id = String(t.theme_id || "").trim();
   const name = String(t.theme_name || "").trim().slice(0, 30);
+  if (!id) id = "t_" + Utilities.formatDate(new Date(), TZ, "yyyyMMddHHmmss"); // 省略時は自動採番
   if (!/^[a-z0-9_]{2,40}$/.test(id)) throw err_("テーマIDは半角小文字英数と_で入力してください");
-  if (!name) throw err_("テーマ名を入力してください");
+  if (!name) throw err_("カテゴリ名を入力してください");
+  ensureHeaders_(SHEETS.THEMES);
   const lock = LockService.getScriptLock();
   lock.waitLock(20000);
   try {
-    if (rows_(SHEETS.THEMES).some(x => x.theme_id === id)) throw err_("そのテーマIDは既に使われています");
-    const theme = { theme_id: id, theme_name: name, icon: String(t.icon || "📍").slice(0, 4), default_center: String(t.default_center || "") };
-    sheet_(SHEETS.THEMES).appendRow([theme.theme_id, theme.theme_name, theme.icon, theme.default_center]);
-    return { ok: true, theme: theme };
+    const themes = rows_(SHEETS.THEMES);
+    if (themes.some(x => x.theme_id === id)) throw err_("そのテーマIDは既に使われています");
+    if (themes.some(x => String(x.theme_name).trim() === name)) throw err_("同じ名前のカテゴリが既にあります");
+    const theme = {
+      theme_id: id, theme_name: name, icon: String(t.icon || "📍").slice(0, 4),
+      default_center: String(t.default_center || ""), created_by: user.user_id
+    };
+    appendObj_(SHEETS.THEMES, theme);
+    return { ok: true, theme: { theme_id: id, theme_name: name, icon: theme.icon, default_center: theme.default_center, can_edit: true } };
   } finally {
     lock.releaseLock();
   }
 }
 
-function saveSpots_(req) {
+/** カテゴリ名・アイコンの変更 */
+function updateTheme_(req, user) {
+  const id = String(req.theme_id || "");
+  const name = String(req.theme_name || "").trim().slice(0, 30);
+  const icon = String(req.icon || "").trim().slice(0, 4) || "📍";
+  if (!name) throw err_("カテゴリ名を入力してください");
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const sh = sheet_(SHEETS.THEMES);
+    const values = sh.getDataRange().getValues();
+    const head = values[0];
+    const cId = head.indexOf("theme_id"), cName = head.indexOf("theme_name"), cIcon = head.indexOf("icon"), cBy = head.indexOf("created_by");
+    let row = -1;
+    for (let i = 1; i < values.length; i++) {
+      if (values[i][cId] === id) row = i;
+      else if (String(values[i][cName]).trim() === name) throw err_("同じ名前のカテゴリが既にあります");
+    }
+    if (row < 0) throw err_("カテゴリが見つかりません");
+    if (!canEdit_(user, cBy >= 0 ? values[row][cBy] : "")) throw err_("このカテゴリを変更する権限がありません", "FORBIDDEN");
+    sh.getRange(row + 1, cName + 1).setValue(name);
+    sh.getRange(row + 1, cIcon + 1).setValue(icon);
+    return { ok: true, theme: { theme_id: id, theme_name: name, icon: icon } };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** カテゴリ削除（中のスポットもまとめて削除） */
+function deleteTheme_(req, user) {
+  const id = String(req.theme_id || "");
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const sh = sheet_(SHEETS.THEMES);
+    const values = sh.getDataRange().getValues();
+    const head = values[0];
+    const cId = head.indexOf("theme_id"), cBy = head.indexOf("created_by");
+    if (values.length <= 2) throw err_("カテゴリが1つしかないため削除できません");
+    let row = -1;
+    for (let i = 1; i < values.length; i++) if (values[i][cId] === id) row = i;
+    if (row < 0) throw err_("カテゴリが見つかりません");
+    if (!canEdit_(user, cBy >= 0 ? values[row][cBy] : "")) throw err_("このカテゴリを削除する権限がありません", "FORBIDDEN");
+    const removed = rewriteRows_(SHEETS.SPOTS, r => r.theme_id !== id);
+    sh.deleteRow(row + 1);
+    return { ok: true, deleted_spots: removed };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** 管理画面用：カテゴリ内のスポット一覧（取り込み単位・削除可否つき） */
+function getManageData_(req, user) {
+  const id = String(req.theme_id || "");
+  const spots = rows_(SHEETS.SPOTS).filter(s => s.spot_id && s.theme_id === id).map(s => ({
+    spot_id: s.spot_id,
+    name: s.name,
+    batch: batchOf_(s),
+    mine: !!s.created_by && s.created_by === user.user_id,
+    can_delete: canEdit_(user, s.created_by)
+  }));
+  return { ok: true, is_admin: isAdmin_(user), spots: spots };
+}
+
+function batchOf_(s) {
+  if (s.import_batch) return String(s.import_batch);
+  const m = String(s.spot_id || "").match(/_(\d{14})_\d+$/); // 旧形式のIDから取り込み日時を復元
+  return m ? m[1] : "";
+}
+
+/** スポットの一括削除 */
+function deleteSpots_(req, user) {
+  const ids = (req.spot_ids || []).map(String);
+  if (!ids.length) throw err_("削除するスポットを選んでください");
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    let denied = 0;
+    const target = {};
+    ids.forEach(id => { target[id] = true; });
+    const removed = rewriteRows_(SHEETS.SPOTS, r => {
+      if (!target[r.spot_id]) return true;
+      if (!canEdit_(user, r.created_by)) { denied++; return true; }
+      return false;
+    });
+    return { ok: true, deleted: removed, denied: denied };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function saveSpots_(req, user) {
   const themeId = String(req.theme_id || "");
   if (!rows_(SHEETS.THEMES).some(x => x.theme_id === themeId)) throw err_("保存先のテーマが見つかりません");
   const list = (req.spots || []).map(normalizeSpot_).filter(s => s);
   if (!list.length) throw err_("保存できるスポットがありません");
+  ensureHeaders_(SHEETS.SPOTS);
 
   const lock = LockService.getScriptLock();
   lock.waitLock(20000);
   try {
     const existing = rows_(SHEETS.SPOTS).filter(s => s.theme_id === themeId).map(s => String(s.name).trim());
     const stamp = Utilities.formatDate(new Date(), TZ, "yyyyMMddHHmmss");
-    const out = [];
+    const objs = [];
     let skipped = 0;
     list.forEach((s, i) => {
       if (existing.indexOf(s.name) >= 0) { skipped++; return; }
       existing.push(s.name);
-      out.push(["s_" + themeId + "_" + stamp + "_" + i, themeId, s.name, s.lat, s.lng, s.altitude, s.heading, s.pitch,
-        s.video_url, s.eagle_comment, s.tags]);
+      objs.push({
+        spot_id: "s_" + themeId + "_" + stamp + "_" + i, theme_id: themeId, name: s.name, lat: s.lat, lng: s.lng,
+        altitude: s.altitude, heading: s.heading, pitch: s.pitch, video_url: s.video_url,
+        eagle_comment: s.eagle_comment, tags: s.tags, created_by: user.user_id, import_batch: stamp
+      });
     });
-    if (out.length) {
+    if (objs.length) {
       const sh = sheet_(SHEETS.SPOTS);
-      sh.getRange(sh.getLastRow() + 1, 1, out.length, out[0].length).setValues(out);
+      const head = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
+      const out = objs.map(o => head.map(h => (o[h] === undefined ? "" : o[h])));
+      sh.getRange(sh.getLastRow() + 1, 1, out.length, head.length).setValues(out);
     }
-    return { ok: true, saved: out.length, skipped: skipped };
+    return { ok: true, saved: objs.length, skipped: skipped };
   } finally {
     lock.releaseLock();
   }
@@ -601,6 +723,47 @@ function rows_(name) {
     return o;
   });
 }
+/** 見出し行に不足している列を右端へ追加（旧バージョンのシートを自動移行） */
+function ensureHeaders_(name) {
+  const sh = sheet_(name);
+  const lastCol = Math.max(sh.getLastColumn(), 1);
+  const head = sh.getRange(1, 1, 1, lastCol).getValues()[0].map(String);
+  let col = head.filter(h => h).length ? lastCol : 0;
+  HEADERS[name].forEach(h => {
+    if (head.indexOf(h) < 0) { col++; sh.getRange(1, col).setValue(h).setFontWeight("bold"); }
+  });
+}
+
+/** 1行をオブジェクトで追記（見出しの並びに合わせる） */
+function appendObj_(name, obj) {
+  const sh = sheet_(name);
+  const head = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
+  sh.appendRow(head.map(h => (obj[h] === undefined ? "" : obj[h])));
+}
+
+/** keep(row) が false の行を削除してシートを書き直す。削除件数を返す */
+function rewriteRows_(name, keep) {
+  const sh = sheet_(name);
+  const values = sh.getDataRange().getValues();
+  if (values.length <= 1) return 0;
+  const head = values[0];
+  const body = values.slice(1);
+  const kept = body.filter(r => {
+    const o = {};
+    head.forEach((h, i) => { o[h] = r[i]; });
+    return keep(o);
+  });
+  const removed = body.length - kept.length;
+  if (!removed) return 0;
+  sh.getRange(2, 1, body.length, head.length).clearContent();
+  if (kept.length) sh.getRange(2, 1, kept.length, head.length).setValues(kept);
+  // 空いた行を削除（見出し以外の行を全部消すとエラーになるため、空なら1行残す）
+  const start = kept.length ? kept.length + 2 : 3;
+  const count = body.length - kept.length - (kept.length ? 0 : 1);
+  if (count > 0) sh.deleteRows(start, count);
+  return removed;
+}
+
 function prop_(k) { return PropertiesService.getScriptProperties().getProperty(k) || ""; }
 function json_(o) { return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON); }
 function now_() { return Utilities.formatDate(new Date(), TZ, "yyyy-MM-dd HH:mm:ss"); }

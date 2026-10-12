@@ -340,6 +340,7 @@
 
     // 取り込みモーダル
     bindImportUI();
+    bindManageUI();
 
     // Escで閉じる
     document.addEventListener("keydown", e => {
@@ -386,10 +387,11 @@
 
   function renderThemeTabs() {
     $("#themeTabs").innerHTML = S.themes.map(t =>
-      `<button class="theme-tab" data-id="${esc(t.theme_id)}">${esc(t.icon || "📍")} ${esc(t.theme_name)}</button>`).join("");
+      `<button class="theme-tab ${t.theme_id === S.themeId ? "active" : ""}" data-id="${esc(t.theme_id)}">${esc(t.icon || "📍")} ${esc(t.theme_name)}</button>`).join("");
     $$("#themeTabs .theme-tab").forEach(b => b.addEventListener("click", () => selectTheme(b.dataset.id)));
     $("#themeSelect").innerHTML = S.themes.map(t =>
       `<option value="${esc(t.theme_id)}">${esc(t.icon || "📍")} ${esc(t.theme_name)}</option>`).join("");
+    if (S.themeId) $("#themeSelect").value = S.themeId;
   }
 
   function currentTheme() { return S.themes.find(t => t.theme_id === S.themeId) || {}; }
@@ -1241,15 +1243,15 @@
         const theme_name = $("#ntName").value.trim();
         const theme_id = $("#ntId").value.trim();
         const icon = $("#ntIcon").value.trim() || "📍";
-        if (!theme_name || !/^[a-z0-9_]{2,40}$/.test(theme_id)) {
+        if (!theme_name || (theme_id && !/^[a-z0-9_]{2,40}$/.test(theme_id))) {
           hideLoading();
-          return showToast("テーマ名と、半角小文字英数・_ のテーマIDを入力してください", 4000);
+          return showToast("テーマ名を入力してください（テーマIDは空欄か、半角小文字英数と_）", 4000);
         }
         const avg = k => payload.reduce((sum, p) => sum + (+p[k]), 0) / payload.length;
         const r = await Api.call("saveTheme", { theme: { theme_id, theme_name, icon, default_center: `${avg("lat").toFixed(4)},${avg("lng").toFixed(4)},6` } });
         S.themes.push(r.theme);
         renderThemeTabs();
-        themeId = theme_id;
+        themeId = r.theme.theme_id;
       }
       const res = await Api.call("saveSpots", { theme_id: themeId, spots: payload });
       hideLoading();
@@ -1258,6 +1260,205 @@
       renderImportPreview();
       $("#importModal").classList.add("hidden");
       await selectTheme(themeId, false, true);
+    } catch (e) {
+      hideLoading();
+      showToast(e.message, 5000);
+    }
+  }
+
+  /* =========================================================
+   * カテゴリ・スポット管理（追加・名前変更・一括削除）
+   * ========================================================= */
+  const M = { themeId: "", batch: "all", spots: [], sel: new Set(), isAdmin: false };
+
+  function bindManageUI() {
+    $("#btnManage").addEventListener("click", openManage);
+    $("#btnManageMenu").addEventListener("click", openManage);
+    $("#manageClose").addEventListener("click", () => $("#manageModal").classList.add("hidden"));
+    $("#mgTheme").addEventListener("change", e => loadManageSpots(e.target.value));
+    $("#mgBatch").addEventListener("change", e => { M.batch = e.target.value; M.sel.clear(); renderManageSpots(); });
+    $("#mgAll").addEventListener("change", e => {
+      visibleManageSpots().filter(x => x.can_delete).forEach(x => (e.target.checked ? M.sel.add(x.spot_id) : M.sel.delete(x.spot_id)));
+      renderManageSpots();
+    });
+    $("#mgSpotList").addEventListener("change", e => {
+      const id = e.target.dataset.id;
+      if (!id) return;
+      if (e.target.checked) M.sel.add(id); else M.sel.delete(id);
+      updateManageCount();
+    });
+    $("#btnDeleteSpots").addEventListener("click", deleteSelectedSpots);
+    $("#btnAddTheme").addEventListener("click", addTheme);
+    $("#newThemeName").addEventListener("keydown", e => { if (e.key === "Enter") addTheme(); });
+    $("#mgThemeList").addEventListener("click", onManageThemeClick);
+  }
+
+  function openManage() {
+    const admin = !!(Auth.user && Auth.user.is_admin);
+    $("#mgRole").textContent = admin
+      ? "管理者としてログイン中：すべてのカテゴリとスポットを変更・削除できます。"
+      : "自分で作成したカテゴリと、自分が取り込んだスポットを変更・削除できます（🔒は変更できません）。";
+    renderManageThemes();
+    $("#manageModal").classList.remove("hidden");
+    loadManageSpots(M.themeId && S.themes.some(t => t.theme_id === M.themeId) ? M.themeId : S.themeId);
+  }
+
+  function renderManageThemes() {
+    $("#mgThemeList").innerHTML = S.themes.map(t => `
+      <div class="mg-theme-row" data-id="${esc(t.theme_id)}">
+        <input type="text" class="mg-icon" maxlength="4" value="${esc(t.icon || "📍")}" aria-label="アイコン" ${t.can_edit ? "" : "disabled"}>
+        <input type="text" class="mg-tname" maxlength="30" value="${esc(t.theme_name)}" aria-label="カテゴリ名" ${t.can_edit ? "" : "disabled"}>
+        ${t.can_edit
+          ? `<button class="chip-btn" data-act="rename">名前を保存</button>
+             <button class="chip-btn danger" data-act="delete">削除</button>`
+          : `<span class="mg-lock" style="grid-column: span 2">🔒 変更できません</span>`}
+      </div>`).join("");
+    $("#mgTheme").innerHTML = S.themes.map(t =>
+      `<option value="${esc(t.theme_id)}">${esc(t.icon || "📍")} ${esc(t.theme_name)}</option>`).join("");
+    if (M.themeId) $("#mgTheme").value = M.themeId;
+  }
+
+  async function addTheme() {
+    const theme_name = $("#newThemeName").value.trim();
+    const icon = $("#newThemeIcon").value.trim() || "📍";
+    if (!theme_name) return showToast("新しいカテゴリ名を入力してください");
+    showLoading("カテゴリを追加中…");
+    try {
+      const r = await Api.call("saveTheme", { theme: { theme_name, icon } });
+      S.themes.push(r.theme);
+      S.spotsCache[r.theme.theme_id] = [];
+      $("#newThemeName").value = ""; $("#newThemeIcon").value = "";
+      renderThemeTabs();
+      renderManageThemes();
+      showToast(`カテゴリ「${theme_name}」を追加しました。＋スポット取込から中身を入れられます`, 4500);
+    } catch (e) {
+      showToast(e.message, 5000);
+    } finally { hideLoading(); }
+  }
+
+  async function onManageThemeClick(e) {
+    const btn = e.target.closest("button[data-act]");
+    if (!btn) return;
+    const row = btn.closest(".mg-theme-row");
+    const id = row.dataset.id;
+    const theme = S.themes.find(t => t.theme_id === id);
+    if (!theme) return;
+
+    if (btn.dataset.act === "rename") {
+      const theme_name = $(".mg-tname", row).value.trim();
+      const icon = $(".mg-icon", row).value.trim() || "📍";
+      if (!theme_name) return showToast("カテゴリ名を入力してください");
+      showLoading("名前を変更中…");
+      try {
+        await Api.call("updateTheme", { theme_id: id, theme_name, icon });
+        theme.theme_name = theme_name; theme.icon = icon;
+        renderThemeTabs();
+        renderManageThemes();
+        showToast("カテゴリ名を変更しました");
+      } catch (err) {
+        showToast(err.message, 5000);
+      } finally { hideLoading(); }
+    }
+
+    if (btn.dataset.act === "delete") {
+      if (S.themes.length <= 1) return showToast("カテゴリが1つしかないため削除できません");
+      const n = (S.spotsCache[id] || []).length;
+      const ok = confirm(`カテゴリ「${theme.theme_name}」と、その中のスポット${n ? n + "件" : ""}をすべて削除します。\n元に戻せません。よろしいですか？`);
+      if (!ok) return;
+      showLoading("カテゴリを削除中…");
+      try {
+        const r = await Api.call("deleteTheme", { theme_id: id });
+        S.themes = S.themes.filter(t => t.theme_id !== id);
+        delete S.spotsCache[id];
+        if (M.themeId === id) M.themeId = "";
+        hideLoading();
+        showToast(`カテゴリを削除しました（スポット${r.deleted_spots}件）`, 4000);
+        if (S.themeId === id) await selectTheme(S.themes[0].theme_id, true);
+        renderThemeTabs();
+        renderManageThemes();
+        loadManageSpots(M.themeId || S.themeId);
+      } catch (err) {
+        hideLoading();
+        showToast(err.message, 5000);
+      }
+    }
+  }
+
+  function batchLabel(b) {
+    if (!b) return "初期データ・手入力";
+    const m = String(b).match(/^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})/);
+    return m ? `取り込み ${m[1]}/${m[2]}/${m[3]} ${m[4]}:${m[5]}` : String(b);
+  }
+
+  async function loadManageSpots(themeId) {
+    M.themeId = themeId;
+    M.sel.clear();
+    M.batch = "all";
+    $("#mgTheme").value = themeId;
+    $("#mgSpotList").innerHTML = `<div class="mg-empty">読み込み中…</div>`;
+    try {
+      const r = await Api.call("getManageData", { theme_id: themeId });
+      if (M.themeId !== themeId) return;
+      M.spots = r.spots || [];
+      M.isAdmin = r.is_admin;
+    } catch (e) {
+      M.spots = [];
+      showToast(e.message, 5000);
+    }
+    // 取り込み単位（新しい順）
+    const groups = {};
+    M.spots.forEach(x => { groups[x.batch] = (groups[x.batch] || 0) + 1; });
+    const keys = Object.keys(groups).sort((a, b) => (b || "0").localeCompare(a || "0"));
+    $("#mgBatch").innerHTML = `<option value="all">すべて（${M.spots.length}件）</option>` +
+      keys.map(k => `<option value="${esc(k || "__none__")}">${esc(batchLabel(k))}（${groups[k]}件）</option>`).join("");
+    renderManageSpots();
+  }
+
+  function visibleManageSpots() {
+    if (M.batch === "all") return M.spots;
+    const b = M.batch === "__none__" ? "" : M.batch;
+    return M.spots.filter(x => x.batch === b);
+  }
+
+  function renderManageSpots() {
+    const list = visibleManageSpots();
+    if (!list.length) {
+      $("#mgSpotList").innerHTML = `<div class="mg-empty">このカテゴリにはスポットがありません</div>`;
+    } else {
+      $("#mgSpotList").innerHTML = list.map(x => `
+        <label class="mg-spot ${x.can_delete ? "" : "locked"}">
+          <input type="checkbox" data-id="${esc(x.spot_id)}" ${M.sel.has(x.spot_id) ? "checked" : ""} ${x.can_delete ? "" : "disabled"}>
+          <span class="mg-name">${x.can_delete ? "" : "🔒 "}${esc(x.name)}</span>
+          <small>${esc(batchLabel(x.batch))}${x.mine ? "・自分" : ""}</small>
+        </label>`).join("");
+    }
+    const deletable = list.filter(x => x.can_delete);
+    $("#mgAll").checked = deletable.length > 0 && deletable.every(x => M.sel.has(x.spot_id));
+    $("#mgAll").disabled = deletable.length === 0;
+    updateManageCount();
+  }
+
+  function updateManageCount() {
+    const n = M.sel.size;
+    $("#mgCount").textContent = n ? `${n}件を選択中` : "";
+    $("#btnDeleteSpots").disabled = n === 0;
+    const deletable = visibleManageSpots().filter(x => x.can_delete);
+    $("#mgAll").checked = deletable.length > 0 && deletable.every(x => M.sel.has(x.spot_id));
+  }
+
+  async function deleteSelectedSpots() {
+    const ids = [...M.sel];
+    if (!ids.length) return;
+    const theme = S.themes.find(t => t.theme_id === M.themeId) || {};
+    if (!confirm(`「${theme.theme_name || ""}」から${ids.length}件のスポットを削除します。\n元に戻せません。よろしいですか？`)) return;
+    showLoading(`${ids.length}件を削除中…`);
+    try {
+      const r = await Api.call("deleteSpots", { spot_ids: ids });
+      hideLoading();
+      showToast(`${r.deleted}件を削除しました${r.denied ? `（権限のない${r.denied}件は残しました）` : ""}`, 4000);
+      delete S.spotsCache[M.themeId];
+      if (M.themeId === S.themeId) await selectTheme(S.themeId, true, true);
+      loadManageSpots(M.themeId);
     } catch (e) {
       hideLoading();
       showToast(e.message, 5000);

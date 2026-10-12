@@ -15,7 +15,7 @@
   <link href="https://cdn.jsdelivr.net/npm/cesium@1.121.0/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/cesium@1.121.0/Build/Cesium/Cesium.js"></script>
 
-  <link rel="stylesheet" href="style.css?v=1.2.0">
+  <link rel="stylesheet" href="style.css?v=1.3.0">
 </head>
 <body>
 
@@ -39,12 +39,14 @@
 
     <div class="user-area">
       <button id="btnMute" class="icon-btn" title="音声のオン/オフ" aria-label="音声のオン/オフ">🔊</button>
+      <button id="btnManage" class="icon-btn" title="カテゴリ・スポット管理" aria-label="カテゴリ・スポット管理">⚙️</button>
       <button id="btnImport" class="import-btn" title="スポットを取り込む"><span aria-hidden="true">＋</span><span class="import-label">スポット取込</span></button>
       <div class="user-menu">
         <button id="btnUser" class="user-chip" aria-haspopup="true" aria-expanded="false">
           <span aria-hidden="true">🧑‍✈️</span><span id="userName">搭乗者</span>
         </button>
         <div id="userDropdown" class="dropdown hidden" role="menu">
+          <button id="btnManageMenu" role="menuitem">カテゴリ・スポット管理</button>
           <button id="btnChangePw" role="menuitem">パスワード変更</button>
           <button id="btnLogout" role="menuitem">ログアウト</button>
         </div>
@@ -188,8 +190,8 @@
         </div>
         <div class="form-grid">
           <div class="form-row">
-            <label for="ntId">テーマID（半角小文字英数と_）</label>
-            <input id="ntId" type="text" placeholder="kyoto_temples">
+            <label for="ntId">テーマID（任意・半角小文字英数と_）</label>
+            <input id="ntId" type="text" placeholder="空欄なら自動で付けます">
           </div>
           <div class="form-row">
             <label for="ntIcon">アイコン</label>
@@ -262,6 +264,47 @@
         <span id="saveCount" class="muted"></span>
         <button id="btnSaveSpots" class="btn btn-primary" disabled>チェックしたスポットを保存</button>
       </div>
+    </div>
+  </div>
+
+  <!-- ===== カテゴリ・スポット管理モーダル ===== -->
+  <div id="manageModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="manageTitle">
+    <div class="modal-box manage-box">
+      <button class="modal-x" id="manageClose" aria-label="閉じる">×</button>
+      <h2 id="manageTitle" class="modal-title">カテゴリ・スポット管理</h2>
+      <p id="mgRole" class="hint"></p>
+
+      <!-- カテゴリ -->
+      <section class="mg-section">
+        <h3 class="mg-h">カテゴリ（テーマ）の追加・名前変更</h3>
+        <div id="mgThemeList" class="mg-theme-list"></div>
+        <div class="mg-add">
+          <input id="newThemeIcon" type="text" maxlength="4" placeholder="🏞️" aria-label="アイコン（絵文字）">
+          <input id="newThemeName" type="text" maxlength="30" placeholder="新しいカテゴリ名（例：日本の名湯めぐり）" aria-label="新しいカテゴリ名">
+          <button id="btnAddTheme" class="btn btn-primary">追加</button>
+        </div>
+      </section>
+
+      <!-- スポット一括削除 -->
+      <section class="mg-section">
+        <h3 class="mg-h">スポットの一括削除</h3>
+        <div class="form-grid">
+          <div class="form-row">
+            <label for="mgTheme">カテゴリ</label>
+            <select id="mgTheme"></select>
+          </div>
+          <div class="form-row">
+            <label for="mgBatch">取り込み単位で絞り込む</label>
+            <select id="mgBatch"></select>
+          </div>
+        </div>
+        <label class="check-inline mg-all"><input type="checkbox" id="mgAll"> 表示中のスポットをすべて選択</label>
+        <div id="mgSpotList" class="mg-spot-list"></div>
+        <div class="modal-actions">
+          <span id="mgCount" class="muted"></span>
+          <button id="btnDeleteSpots" class="btn btn-danger" disabled>選択したスポットを削除</button>
+        </div>
+      </section>
     </div>
   </div>
 
@@ -364,8 +407,8 @@
   <div id="toast" class="toast" role="status"></div>
   <div id="versionBadge" class="version-badge"></div>
 
-  <script src="config.js?v=1.2.0"></script>
-  <script src="auth.js?v=1.2.0"></script>
-  <script src="app.js?v=1.2.0"></script>
+  <script src="config.js?v=1.3.0"></script>
+  <script src="auth.js?v=1.3.0"></script>
+  <script src="app.js?v=1.3.0"></script>
 </body>
 </html>
