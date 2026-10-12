@@ -17,13 +17,13 @@ const APP_CONFIG = {
   //   ※必ず「HTTPリファラー制限：https://kenken6291.github.io/*」と
   //     「API制限：上記3つのAPI」を付けたキーを使ってください。
   //   空のままだと航空写真（平面）で表示します。
-  GOOGLE_MAPS_API_KEY: "",
+  GOOGLE_MAPS_API_KEY: "AIzaSyBn945ysEAHA_93bp-fx7XSpgUs8YJP6Wk",
 
   // 任意：Cesium ion のアクセストークン。設定すると3D地形＋3D建物が有効になります。
   //       空のままでも航空写真（Esri World Imagery）で動作します。
   CESIUM_ION_TOKEN: "",
 
-  VERSION: "v1.7.0",
+  VERSION: "v1.7.2",
   APP_TITLE: "鷲の目紀行",
   APP_SUBTITLE: "イーグル隊長の空中散歩",
   DEBUG_MODE: false,
