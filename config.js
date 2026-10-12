@@ -21,7 +21,7 @@ const APP_CONFIG = {
   //       空のままでも航空写真（Esri World Imagery）で動作します。
   CESIUM_ION_TOKEN: "",
 
-  VERSION: "v1.5.1",
+  VERSION: "v1.6.0",
   APP_TITLE: "鷲の目紀行",
   APP_SUBTITLE: "イーグル隊長の空中散歩",
   DEBUG_MODE: false,
@@ -32,5 +32,6 @@ const APP_CONFIG = {
   // localStorageのキー
   STORAGE_KEY_TOKEN: "eagle_captain_token",
   STORAGE_KEY_THEME: "eagle_captain_theme",
-  STORAGE_KEY_MUTE: "eagle_captain_mute"
+  STORAGE_KEY_MUTE: "eagle_captain_mute",
+  STORAGE_KEY_PINS: "eagle_captain_pins"
 };

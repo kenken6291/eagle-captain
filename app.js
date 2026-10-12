@@ -44,6 +44,8 @@
     orbitOff: null,     // 旋回リスナー解除関数
     orbitView: null,
     muted: localStorage.getItem(APP_CONFIG.STORAGE_KEY_MUTE) === "1",
+    pinFocus: localStorage.getItem(APP_CONFIG.STORAGE_KEY_PINS) !== "all", // true: 目的地のみ表示
+    flyingTo: null,     // 飛行中の目的地
     importDraft: [],
     visits: new Map(),  // spot_id -> 行ったところの記録
     themeTotals: {},
@@ -341,7 +343,7 @@
     $("#btnQuiz").addEventListener("click", modeQuiz);
     $("#btnOverview").addEventListener("click", () => {
       if (guardBusy()) return;
-      stopOrbit(); hideCard(); closeVideo(); S.current = null; refreshPinColors();
+      stopOrbit(); hideCard(); closeVideo(); S.current = null; refreshPinColors(); applyPinVisibility();
       $("#hudTarget").textContent = "上空待機中";
       flyOverview();
     });
@@ -352,6 +354,14 @@
       updateMuteBtn();
     });
     $("#cardClose").addEventListener("click", hideCard);
+    updatePinsBtn();
+    $("#btnPins").addEventListener("click", () => {
+      S.pinFocus = !S.pinFocus;
+      localStorage.setItem(APP_CONFIG.STORAGE_KEY_PINS, S.pinFocus ? "focus" : "all");
+      updatePinsBtn();
+      applyPinVisibility();
+      showToast(S.pinFocus ? "到着したスポット以外のピンを隠します" : "すべてのピンを表示します");
+    });
     $("#videoClose").addEventListener("click", closeVideo);
 
     // 取り込みモーダル
@@ -469,11 +479,30 @@
       e.spot = sp;
       S.entities.set(sp.spot_id, e);
     });
+    applyPinVisibility();
   }
 
   /** sp を渡すとそのピンだけ表示、null で全ピンを表示 */
   function showOnlyPin(sp) {
     S.entities.forEach((e, id) => { e.show = !sp || id === sp.spot_id; });
+  }
+
+  /**
+   * ピンの表示ルール
+   *  - 飛行中：目的地だけ
+   *  - 「目的地のみ」ON で到着後：いまいるスポットだけ
+   *  - 上空待機中（全体を見る・テーマ切替直後）：すべて（行き先を選べるように）
+   */
+  function applyPinVisibility() {
+    if (S.flyingTo) return showOnlyPin(S.flyingTo);
+    if (S.pinFocus && S.current) return showOnlyPin(S.current);
+    showOnlyPin(null);
+  }
+
+  function updatePinsBtn() {
+    const b = $("#btnPins");
+    b.textContent = S.pinFocus ? "📍 目的地のみ" : "📍 すべて表示";
+    b.setAttribute("aria-pressed", String(S.pinFocus));
   }
 
   function pinLabel(sp) { return S.visits.has(sp.spot_id) ? `✔ ${sp.name}` : sp.name; }
@@ -585,7 +614,8 @@
     $("#hudTarget").textContent = `→ ${sp.name}`;
 
     S.spots.forEach(p => setPin(p, p.spot_id === sp.spot_id ? "hi" : "normal"));
-    showOnlyPin(sp);   // 飛行中は目的地以外のピンを隠す
+    S.flyingTo = sp;
+    applyPinVisibility();   // 飛行中は目的地以外のピンを隠す
     document.body.classList.add("flying");
     Sfx.wind(true);
 
@@ -612,9 +642,10 @@
     Sfx.wind(false);
     Sfx.chime();
 
-    // 到着：ほかのピンを再表示
-    showOnlyPin(null);
+    // 到着
+    S.flyingTo = null;
     S.current = sp;
+    applyPinVisibility();
     refreshPinColors();
     $("#hudTarget").textContent = sp.name;
     startOrbit(view);
@@ -688,6 +719,7 @@
     if (seq[seq.length - 1] === winner) seq.pop();
     seq.push(winner);
 
+    showOnlyPin(null);   // ルーレット中は全ピンを表示
     Sfx.drumroll(3.8);
     let delay = 55, prev = null;
     for (const p of seq) {

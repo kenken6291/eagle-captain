@@ -119,6 +119,12 @@ body.flying #windStreaks { opacity: 1; animation: streak .5s linear infinite; }
 .hud-k { color: var(--sky); }
 .hud-v { color: var(--brass-2); font-weight: 700; }
 .hud-target { border-top: 1px solid rgba(255,255,255,.15); margin-top: 4px; padding-top: 4px; }
+.hud-btn {
+  display: block; width: 100%; margin-top: 8px; padding: 6px 8px;
+  border-radius: 999px; border: 1px solid var(--brass);
+  background: var(--brass); color: var(--navy); font-weight: 800; font-size: 12.5px;
+}
+.hud-btn[aria-pressed="false"] { background: transparent; color: var(--paper); }
 .hud-target .hud-v { color: var(--white); max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---------- 行き先選定パネル ---------- */
@@ -611,6 +617,7 @@ body.flying #clouds { opacity: 1; }
   .hud { top: calc(62px + var(--safe-t)); left: 8px; min-width: 0; padding: 6px 10px; }
   .hud-row { font-size: 11.5px; line-height: 1.55; }
   .hud-target { display: none; }
+  .hud-btn { margin-top: 4px; padding: 4px 6px; font-size: 11px; }
   .mode-panel { left: 8px; right: 8px; transform: none; border-radius: 16px; gap: 6px; padding: 6px; }
   .mode-btn { flex: 1; flex-direction: column; gap: 2px; padding: 8px 4px; border-radius: 12px; font-size: 11.5px; }
   .mode-ico { font-size: 22px; }
