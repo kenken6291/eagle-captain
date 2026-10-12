@@ -368,6 +368,9 @@
     bindImportUI();
     bindManageUI();
     bindVisitUI();
+    $("#svBack").addEventListener("click", takeOff);
+    $("#svFace").addEventListener("click", faceTarget);
+    $("#svMaps").addEventListener("click", () => window.open(mapsPanoUrl(), "_blank", "noopener"));
 
     // Escで閉じる
     document.addEventListener("keydown", e => {
@@ -921,6 +924,7 @@
         ${comment ? `<p class="card-comment">${esc(comment)}</p>` : ""}
         <div class="card-actions">
           <button class="chip-btn" id="btnReplay">🔊 もう一度聞く</button>
+          ${S.current && S.current.spot_id === sp.spot_id ? `<button class="chip-btn" id="btnLand">🛬 降りる（ストリートビュー）</button>` : ""}
           <button class="chip-btn" id="btnOrbit">🔄 旋回</button>
           ${sp.video_url ? `<button class="chip-btn" id="btnVideo">🎬 空撮映像</button>` : ""}
         </div>
@@ -931,6 +935,7 @@
           ${nexts.map(n => `<button class="next-btn" data-id="${esc(n.p.spot_id)}">${esc(n.p.name)}<small>約${Math.round(n.d).toLocaleString()} km</small></button>`).join("")}
         </div>`;
       $("#btnReplay").addEventListener("click", () => { Voice.reset(); Voice.say(comment || sp.eagle_comment || sp.name); });
+      if ($("#btnLand")) $("#btnLand").addEventListener("click", () => landAt(sp));
       $("#btnOrbit").addEventListener("click", () => {
         if (S.orbitOff) stopOrbit();
         else if (S.orbitView && S.current === sp) startOrbit(S.orbitView);
@@ -2016,6 +2021,166 @@
     showViewer();
   }
   function closeViewer() { $("#photoViewer").classList.add("hidden"); $("#pvImg").src = ""; }
+
+  /* =========================================================
+   * 着陸 → ストリートビュー → 空へ戻る
+   * ========================================================= */
+  const SV = { spot: null, pano: null, panoLatLng: null, heading: 0, gm: null };
+  let gmapsPromise = null;
+
+  /** Maps JavaScript API（ストリートビュー）を必要なときだけ読み込む */
+  function loadStreetViewLib() {
+    const key = APP_CONFIG.GOOGLE_MAPS_API_KEY;
+    if (!key) return Promise.reject(new Error("NO_KEY"));
+    if (!gmapsPromise) {
+      gmapsPromise = new Promise((resolve, reject) => {
+        window.__eagleGmInit = async () => {
+          try { resolve(await google.maps.importLibrary("streetView")); }
+          catch (e) { reject(e); }
+        };
+        window.gm_authFailure = () => reject(new Error("AUTH"));
+        const sc = document.createElement("script");
+        sc.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(key)}&language=ja&region=JP&loading=async&callback=__eagleGmInit`;
+        sc.async = true;
+        sc.onerror = () => reject(new Error("LOAD"));
+        document.head.appendChild(sc);
+        setTimeout(() => reject(new Error("TIMEOUT")), 15000);
+      }).catch(e => { gmapsPromise = null; throw e; });
+    }
+    return gmapsPromise;
+  }
+
+  /** 目的地の近くのストリートビューを探す（近い順に半径を広げる） */
+  async function findPanorama(sp) {
+    const lib = await loadStreetViewLib();
+    SV.gm = lib;
+    const svc = new lib.StreetViewService();
+    for (const radius of [80, 300, 1000, 3000]) {
+      try {
+        const { data } = await svc.getPanorama({
+          location: { lat: sp.lat, lng: sp.lng }, radius,
+          preference: lib.StreetViewPreference.NEAREST
+        });
+        if (data && data.location) {
+          const ll = data.location.latLng;
+          return { pano: data.location.pano, lat: ll.lat(), lng: ll.lng(), dist: Math.round(distanceKm(sp, { lat: ll.lat(), lng: ll.lng() }) * 1000) };
+        }
+      } catch (e) { /* この半径には無い → 広げる */ }
+    }
+    return null;
+  }
+
+  function mapsPanoUrl() {
+    const p = SV.panoLatLng || SV.spot || {};
+    return `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${p.lat},${p.lng}&heading=${Math.round(SV.heading)}&pitch=5`;
+  }
+
+  async function landAt(sp) {
+    if (S.busy) return showToast("飛行中だ！少し待て！");
+    if (!S.current || S.current.spot_id !== sp.spot_id) return;
+    S.busy = true;
+    setModeButtons(false);
+    SV.spot = sp; SV.panoLatLng = null; SV.pano = null;
+    stopOrbit(); hideCard(); closeVideo();
+
+    Voice.reset();
+    Voice.say(`よし、${sp.name}に着陸するぞ！ここからは自分の目で歩いて見てみろ！`);
+    const panoP = findPanorama(sp).catch(e => ({ error: e }));
+
+    // 降下：ストリートビューの地点（なければ目的地）の上空40mへ、目的地を向いて降りる
+    document.body.classList.add("landing");
+    Sfx.wind(true);
+    const found = await Promise.race([panoP, sleep(4000).then(() => undefined)]);
+    const p = found && !found.error ? found : null;
+    const at = p || sp;
+    const ground = await groundHeight(at);
+    SV.heading = p ? bearing(p.lat, p.lng, sp.lat, sp.lng) : (+sp.heading || 0);
+    await flyP({
+      destination: C.Cartesian3.fromDegrees(at.lng, at.lat, ground + (p ? 40 : 150)),
+      orientation: { heading: toRad(SV.heading), pitch: toRad(p ? -8 : -25), roll: 0 },
+      duration: 3.2, easingFunction: C.EasingFunction.QUADRATIC_IN_OUT
+    });
+    Sfx.wind(false);
+
+    const result = found === undefined ? await panoP : found;
+    document.body.classList.remove("landing");
+    document.body.classList.add("sv-mode");
+    $("#svTitle").textContent = sp.name;
+    $("#svOverlay").classList.remove("hidden");
+    openPanorama(sp, result);
+    S.busy = false;
+  }
+
+  function openPanorama(sp, r) {
+    const box = $("#svPano");
+    box.innerHTML = "";
+    if (r && !r.error) {
+      SV.panoLatLng = { lat: r.lat, lng: r.lng };
+      SV.heading = bearing(r.lat, r.lng, sp.lat, sp.lng);
+      $("#svNote").textContent = r.dist > 30 ? `目的地まで約${r.dist >= 1000 ? (r.dist / 1000).toFixed(1) + "km" : r.dist + "m"}の地点に着陸` : "目的地に着陸";
+      SV.pano = new SV.gm.StreetViewPanorama(box, {
+        pano: r.pano,
+        pov: { heading: SV.heading, pitch: 5 },
+        zoom: 0,
+        addressControl: true,
+        fullscreenControl: false,
+        motionTracking: false,
+        motionTrackingControl: false,
+        showRoadLabels: true,
+        enableCloseButton: false
+      });
+      $("#svFace").classList.remove("hidden");
+      return;
+    }
+    SV.pano = null;
+    $("#svFace").classList.add("hidden");
+    const err = r && r.error ? r.error.message : "";
+    if (err === "NO_KEY" || err === "AUTH" || err === "LOAD" || err === "TIMEOUT") {
+      // APIが使えない場合：Maps Embed API で表示を試す
+      const key = APP_CONFIG.GOOGLE_MAPS_API_KEY;
+      if (key && err !== "NO_KEY") {
+        $("#svNote").textContent = "簡易表示";
+        box.innerHTML = `<iframe src="https://www.google.com/maps/embed/v1/streetview?key=${encodeURIComponent(key)}&location=${sp.lat},${sp.lng}&heading=${Math.round(+sp.heading || 0)}&pitch=5&fov=90&language=ja" allowfullscreen referrerpolicy="no-referrer-when-downgrade"></iframe>`;
+      } else {
+        $("#svNote").textContent = "";
+        box.innerHTML = `<div class="sv-msg">ストリートビューを表示するには、config.js に Google マップの APIキー（Maps JavaScript API を有効化）を設定してください。<br>「Googleマップで開く」からは今すぐ見られます。</div>`;
+      }
+      return;
+    }
+    $("#svNote").textContent = "";
+    box.innerHTML = `<div class="sv-msg">この近くにはストリートビューが見つからなかった…。<br>「空へ戻る」で、もう一度ワシの背中に乗るのだ！</div>`;
+    Voice.say("むむ、この辺りは地上の写真が無いようだ。空へ戻るとするか！");
+  }
+
+  function faceTarget() {
+    if (!SV.pano || !SV.spot) return;
+    const pos = SV.pano.getPosition();
+    const h = pos ? bearing(pos.lat(), pos.lng(), SV.spot.lat, SV.spot.lng) : SV.heading;
+    SV.pano.setPov({ heading: h, pitch: 5 });
+  }
+
+  async function takeOff() {
+    if (S.busy) return;
+    const sp = SV.spot || S.current;
+    $("#svOverlay").classList.add("hidden");
+    document.body.classList.remove("sv-mode");
+    if (SV.pano) { SV.pano.setVisible(false); SV.pano = null; }
+    $("#svPano").innerHTML = "";
+    if (!sp) return;
+    S.busy = true;
+    Voice.reset();
+    Voice.say("よし、空へ戻るぞ！しっかり掴まっておれ！");
+    document.body.classList.add("flying");
+    Sfx.wind(true);
+    const view = await spotView(sp);
+    await flySphereP(view.target, view.offset, { duration: 3, easingFunction: C.EasingFunction.QUADRATIC_OUT });
+    document.body.classList.remove("flying");
+    Sfx.wind(false);
+    startOrbit(view);
+    S.busy = false;
+    setModeButtons(true);
+    showCard(sp, "arrived", await getComment(sp));
+  }
 
   /* ---------- 公開 ---------- */
   window.App = { start };

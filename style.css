@@ -655,3 +655,58 @@ body.flying #clouds { opacity: 1; }
 .vs-chip .t-ico { width: 20px; height: 20px; }
 .vi-body small .t-ico { width: 16px; height: 16px; border-radius: 3px; }
 .vi-thumb .t-ico { width: 100%; height: 100%; border-radius: 0; }
+
+/* ---------- 着陸・ストリートビュー ---------- */
+/* 着陸中：隊長が地面へ降りていく */
+body.landing .captain { transition: top 2.6s ease-in, left .5s ease; top: 62vh; }
+body.landing .eagle { animation: land 2.6s ease-in forwards; }
+body.landing .wing { animation-duration: .3s; }
+@keyframes land {
+  0% { transform: translateY(0) scale(1) rotate(0); }
+  70% { transform: translateY(0) scale(.8) rotate(4deg); }
+  100% { transform: translateY(0) scale(.65) rotate(0); }
+}
+body.landing #spotCard, body.landing .mode-panel, body.sv-mode .mode-panel { display: none; }
+
+.sv-overlay {
+  position: fixed; inset: 0; z-index: 35; display: flex; flex-direction: column;
+  background: #0b1f34; animation: fade .9s ease;
+}
+.sv-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+  padding: calc(8px + var(--safe-t)) 12px 8px;
+  background: linear-gradient(to bottom, rgba(10,26,44,.98), rgba(10,26,44,.9));
+  border-bottom: 2px solid var(--brass);
+}
+.sv-title { min-width: 0; font-family: var(--font-shout); font-size: 18px; color: var(--paper); }
+.sv-title small { display: block; font-family: var(--font-body); font-size: 12px; color: var(--sky); }
+.sv-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.sv-btn {
+  padding: 8px 14px; border-radius: 999px; border: 1px solid rgba(255,255,255,.35);
+  background: rgba(15,39,64,.8); color: var(--white); font-weight: 800; font-size: 13.5px;
+}
+.sv-btn:hover { border-color: var(--brass); }
+.sv-primary { background: var(--signal); border-color: var(--signal); }
+.sv-pano { position: relative; flex: 1; min-height: 0; }
+.sv-pano iframe { width: 100%; height: 100%; border: 0; display: block; }
+.sv-msg { display: grid; place-items: center; height: 100%; padding: 20px; text-align: center; color: var(--paper); line-height: 1.8; }
+
+/* ストリートビュー中：隊長は左下で小さく付き添う */
+body.sv-mode .captain {
+  z-index: 38; top: auto; left: 10px; bottom: calc(14px + var(--safe-b));
+  transform: none; flex-direction: row; align-items: flex-end;
+}
+body.sv-mode .eagle { width: 110px; animation: hover 3.2s ease-in-out infinite alternate; }
+body.sv-mode .wing { animation-duration: 2.4s; }
+body.sv-mode .captain-bubble { pointer-events: none; margin: 0 0 30px -6px; max-width: min(340px, 60vw); }
+body.sv-mode .captain-bubble p { font-size: 15px; }
+body.sv-mode #windStreaks, body.sv-mode #clouds { display: none; }
+@media (max-width: 700px) {
+  .sv-title { font-size: 15px; width: 100%; }
+  .sv-actions { width: 100%; }
+  .sv-btn { flex: 1; padding: 8px 6px; font-size: 12px; }
+  body.sv-mode .captain { flex-direction: row; }
+  body.sv-mode .eagle { width: 80px; }
+  body.sv-mode .captain-bubble { margin: 0 0 20px -4px; }
+  body.sv-mode .captain-bubble::before { display: none; }
+}
