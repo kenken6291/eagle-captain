@@ -251,7 +251,7 @@ const Auth = {
 };
 
 document.addEventListener("DOMContentLoaded", () => {
-  document.title = APP_CONFIG.APP_TITLE;
+  document.title = `${APP_CONFIG.APP_TITLE}｜${APP_CONFIG.APP_SUBTITLE}`;
   $("#versionBadge").textContent = APP_CONFIG.VERSION;
   $("#authVersion").textContent = `${APP_CONFIG.APP_TITLE}  ${APP_CONFIG.VERSION}`;
   Auth.init();

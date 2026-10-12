@@ -1,6 +1,6 @@
 /**
  * =========================================================
- * あの場所は今_イーグル隊長の空中散歩  — GASバックエンド
+ * 鷲の目紀行（イーグル隊長の空中散歩）  — GASバックエンド
  *  - 会員認証（仮パスワード発行・強制変更・再発行・セッション）
  *  - テーマ／スポットCRUD
  *  - Gemini API（スポット生成・クイズ・解説・TTS）プロキシ
@@ -13,19 +13,21 @@
  *   SPREADSHEET_ID : 任意  スタンドアロンGASの場合のみ
  *   ADMIN_EMAILS   : 推奨  管理者のメールアドレス（カンマ区切り）。全カテゴリ・全スポットを編集／削除可能
  *   TTS_FOLDER_ID  : 自動  TTSキャッシュ用Driveフォルダ（初回自動作成）
+ *   PHOTO_FOLDER_ID: 自動  「行ったところ」写真用Driveフォルダ（初回自動作成）
  * =========================================================
  */
 
-const SHEETS = { USERS: "Users", THEMES: "Themes", SPOTS: "Spots", SESSIONS: "Sessions" };
+const SHEETS = { USERS: "Users", THEMES: "Themes", SPOTS: "Spots", SESSIONS: "Sessions", VISITS: "Visits" };
 const HEADERS = {
   Users: ["user_id", "email", "display_name", "password_hash", "status", "created_at", "last_login_at"],
   Themes: ["theme_id", "theme_name", "icon", "default_center", "created_by"],
   Spots: ["spot_id", "theme_id", "name", "lat", "lng", "altitude", "heading", "pitch", "video_url", "eagle_comment", "tags", "created_by", "import_batch"],
-  Sessions: ["token_hash", "user_id", "created_at", "expires_at"]
+  Sessions: ["token_hash", "user_id", "created_at", "expires_at"],
+  Visits: ["visit_id", "user_id", "spot_id", "theme_id", "spot_name", "visited_on", "memo", "photo_ids", "created_at", "updated_at"]
 };
 const TZ = "Asia/Tokyo";
 const SESSION_DAYS = 30;
-const APP_NAME = "あの場所は今_イーグル隊長の空中散歩";
+const APP_NAME = "鷲の目紀行";
 
 const CAPTAIN_SYSTEM = [
   "あなたは空中遊覧ツアーを率いる「イーグル隊長」です。",
@@ -77,6 +79,11 @@ function doPost(e) {
       deleteTheme: deleteTheme_,
       getManageData: getManageData_,
       deleteSpots: deleteSpots_,
+      getVisits: getVisits_,
+      saveVisit: saveVisit_,
+      deleteVisit: deleteVisit_,
+      uploadPhoto: uploadPhoto_,
+      deletePhotos: deletePhotos_,
       getSpots: getSpots_,
       saveTheme: saveTheme_,
       saveSpots: saveSpots_,
@@ -113,8 +120,10 @@ function setup() {
   seedIfEmpty_();
 
   // 権限承認を一度に済ませる
+  ss.getSheetByName(SHEETS.VISITS).getRange("F:F").setNumberFormat("@"); // 日付を文字列のまま保存
   GmailApp.getAliases();
   ttsFolder_();
+  photoFolder_();
   Logger.log("セットアップ完了: " + ss.getUrl());
 }
 
@@ -303,6 +312,18 @@ function isAdmin_(u) {
   const list = prop_("ADMIN_EMAILS").toLowerCase().split(",").map(x => x.trim()).filter(x => x);
   return !!u && list.indexOf(String(u.email).toLowerCase()) >= 0;
 }
+/** カテゴリアイコン：絵文字 または "img:ドライブのファイルID" */
+function isImgIcon_(icon) { return /^img:[\w-]{10,}$/.test(String(icon || "")); }
+function normIcon_(icon, user, current) {
+  const s = String(icon || "").trim();
+  if (isImgIcon_(s)) {
+    if (s === current) return s;  // 変更なし
+    if (!ownPhoto_(s.slice(4), user)) throw err_("アイコン画像を確認できませんでした。もう一度選んでください");
+    return s;
+  }
+  return s.slice(0, 16) || "📍";
+}
+
 /** 管理者、または作成者本人なら編集可 */
 function canEdit_(user, createdBy) {
   return isAdmin_(user) || (!!createdBy && createdBy === user.user_id);
@@ -343,7 +364,7 @@ function saveTheme_(req, user) {
     if (themes.some(x => x.theme_id === id)) throw err_("そのテーマIDは既に使われています");
     if (themes.some(x => String(x.theme_name).trim() === name)) throw err_("同じ名前のカテゴリが既にあります");
     const theme = {
-      theme_id: id, theme_name: name, icon: String(t.icon || "📍").slice(0, 4),
+      theme_id: id, theme_name: name, icon: normIcon_(t.icon, user, ""),
       default_center: String(t.default_center || ""), created_by: user.user_id
     };
     appendObj_(SHEETS.THEMES, theme);
@@ -357,7 +378,6 @@ function saveTheme_(req, user) {
 function updateTheme_(req, user) {
   const id = String(req.theme_id || "");
   const name = String(req.theme_name || "").trim().slice(0, 30);
-  const icon = String(req.icon || "").trim().slice(0, 4) || "📍";
   if (!name) throw err_("カテゴリ名を入力してください");
   const lock = LockService.getScriptLock();
   lock.waitLock(20000);
@@ -373,8 +393,11 @@ function updateTheme_(req, user) {
     }
     if (row < 0) throw err_("カテゴリが見つかりません");
     if (!canEdit_(user, cBy >= 0 ? values[row][cBy] : "")) throw err_("このカテゴリを変更する権限がありません", "FORBIDDEN");
+    const oldIcon = String(values[row][cIcon] || "");
+    const icon = normIcon_(req.icon, user, oldIcon);
     sh.getRange(row + 1, cName + 1).setValue(name);
     sh.getRange(row + 1, cIcon + 1).setValue(icon);
+    if (oldIcon !== icon && isImgIcon_(oldIcon)) trashPhoto_(oldIcon.slice(4), user); // 古いアイコン画像を片付け
     return { ok: true, theme: { theme_id: id, theme_name: name, icon: icon } };
   } finally {
     lock.releaseLock();
@@ -397,6 +420,9 @@ function deleteTheme_(req, user) {
     if (row < 0) throw err_("カテゴリが見つかりません");
     if (!canEdit_(user, cBy >= 0 ? values[row][cBy] : "")) throw err_("このカテゴリを削除する権限がありません", "FORBIDDEN");
     const removed = rewriteRows_(SHEETS.SPOTS, r => r.theme_id !== id);
+    const cIcon = head.indexOf("icon");
+    const oldIcon = cIcon >= 0 ? String(values[row][cIcon] || "") : "";
+    if (isImgIcon_(oldIcon)) trashPhoto_(oldIcon.slice(4), user);
     sh.deleteRow(row + 1);
     return { ok: true, deleted_spots: removed };
   } finally {
@@ -496,6 +522,184 @@ function normalizeSpot_(s) {
     eagle_comment: String(s.eagle_comment || "").trim().slice(0, 200),
     tags: String(s.tags || "").trim().slice(0, 100)
   };
+}
+
+
+/* =========================================================
+ * 行ったところ（チェック・メモ・写真）
+ * ========================================================= */
+const MAX_PHOTOS = 6;
+const MAX_PHOTO_BYTES = 3 * 1024 * 1024;
+
+function visitsSheet_() {
+  const ss = ss_();
+  let sh = ss.getSheetByName(SHEETS.VISITS);
+  if (!sh) {
+    sh = ss.insertSheet(SHEETS.VISITS);
+    sh.getRange(1, 1, 1, HEADERS.Visits.length).setValues([HEADERS.Visits]).setFontWeight("bold");
+    sh.setFrozenRows(1);
+    sh.getRange("F:F").setNumberFormat("@");
+  }
+  return sh;
+}
+
+function photoFolder_() {
+  const props = PropertiesService.getScriptProperties();
+  const id = props.getProperty("PHOTO_FOLDER_ID");
+  if (id) {
+    try { return DriveApp.getFolderById(id); } catch (e) { /* 作り直す */ }
+  }
+  const f = DriveApp.createFolder("eagle_captain_photos");
+  props.setProperty("PHOTO_FOLDER_ID", f.getId());
+  return f;
+}
+
+function fmtDay_(v) {
+  if (v instanceof Date) return Utilities.formatDate(v, TZ, "yyyy-MM-dd");
+  const s = String(v || "");
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : "";
+}
+function splitIds_(v) { return String(v || "").split(",").map(x => x.trim()).filter(x => x); }
+
+function visitObj_(r, spotMap) {
+  const sp = spotMap ? spotMap[r.spot_id] : null;
+  return {
+    visit_id: r.visit_id,
+    spot_id: r.spot_id,
+    theme_id: sp ? sp.theme_id : r.theme_id,
+    spot_name: sp ? sp.name : r.spot_name,
+    spot_exists: !!sp,
+    visited_on: fmtDay_(r.visited_on),
+    memo: String(r.memo || ""),
+    photo_ids: splitIds_(r.photo_ids),
+    created_at: String(r.created_at || ""),
+    updated_at: String(r.updated_at || "")
+  };
+}
+
+/** 自分の「行ったところ」一覧＋カテゴリ別スポット数 */
+function getVisits_(req, user) {
+  visitsSheet_();
+  const spots = rows_(SHEETS.SPOTS).filter(s => s.spot_id);
+  const spotMap = {};
+  const totals = {};
+  spots.forEach(s => { spotMap[s.spot_id] = s; totals[s.theme_id] = (totals[s.theme_id] || 0) + 1; });
+  const visits = rows_(SHEETS.VISITS).filter(r => r.visit_id && r.user_id === user.user_id).map(r => visitObj_(r, spotMap));
+  return { ok: true, visits: visits, theme_totals: totals };
+}
+
+/** 追加・更新（1スポットにつき1件） */
+function saveVisit_(req, user) {
+  const sh = visitsSheet_();
+  const spotId = String(req.spot_id || "");
+  const spot = rows_(SHEETS.SPOTS).filter(s => s.spot_id === spotId)[0];
+  const day = fmtDay_(req.visited_on) || Utilities.formatDate(new Date(), TZ, "yyyy-MM-dd");
+  const memo = String(req.memo || "").trim().slice(0, 500);
+  const photoIds = (req.photo_ids || []).map(String).filter(x => x).slice(0, MAX_PHOTOS);
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const values = sh.getDataRange().getValues();
+    const head = values[0];
+    const col = h => head.indexOf(h);
+    let row = -1;
+    for (let i = 1; i < values.length; i++) {
+      const r = values[i];
+      if (r[col("user_id")] !== user.user_id) continue;
+      if ((req.visit_id && r[col("visit_id")] === req.visit_id) || (!req.visit_id && r[col("spot_id")] === spotId)) { row = i; break; }
+    }
+    if (req.visit_id && row < 0) throw err_("記録が見つかりません");
+    if (row < 0 && !spot) throw err_("スポットが見つかりません");
+
+    // 写真は本人がアップロードしたものだけ受け付ける
+    photoIds.forEach(id => { if (!ownPhoto_(id, user)) throw err_("写真の保存に失敗しました。もう一度追加してください"); });
+
+    const now = now_();
+    if (row >= 0) {
+      const r = values[row];
+      const oldIds = splitIds_(r[col("photo_ids")]);
+      oldIds.filter(id => photoIds.indexOf(id) < 0).forEach(id => trashPhoto_(id, user)); // 外した写真は削除
+      r[col("visited_on")] = day;
+      r[col("memo")] = memo;
+      r[col("photo_ids")] = photoIds.join(",");
+      r[col("updated_at")] = now;
+      sh.getRange(row + 1, 1, 1, head.length).setValues([r]);
+      const obj = {};
+      head.forEach((h, i) => { obj[h] = r[i]; });
+      return { ok: true, visit: visitObj_(obj, spot ? { [spot.spot_id]: spot } : null), created: false };
+    }
+    const obj = {
+      visit_id: "v_" + Utilities.getUuid().slice(0, 13), user_id: user.user_id, spot_id: spotId,
+      theme_id: spot.theme_id, spot_name: spot.name, visited_on: day, memo: memo,
+      photo_ids: photoIds.join(","), created_at: now, updated_at: now
+    };
+    sh.appendRow(head.map(h => (obj[h] === undefined ? "" : obj[h])));
+    return { ok: true, visit: visitObj_(obj, { [spot.spot_id]: spot }), created: true };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** チェックを外す（写真も削除） */
+function deleteVisit_(req, user) {
+  const sh = visitsSheet_();
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const values = sh.getDataRange().getValues();
+    const head = values[0];
+    for (let i = 1; i < values.length; i++) {
+      const r = values[i];
+      if (r[head.indexOf("visit_id")] === req.visit_id && r[head.indexOf("user_id")] === user.user_id) {
+        splitIds_(r[head.indexOf("photo_ids")]).forEach(id => trashPhoto_(id, user));
+        if (values.length === 2) sh.getRange(2, 1, 1, head.length).clearContent();
+        else sh.deleteRow(i + 1);
+        return { ok: true };
+      }
+    }
+    throw err_("記録が見つかりません");
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** 写真アップロード（ブラウザ側で縮小済みのJPEG） */
+function uploadPhoto_(req, user) {
+  const mime = String(req.mime || "image/jpeg");
+  if (["image/jpeg", "image/png", "image/webp"].indexOf(mime) < 0) throw err_("JPEG・PNG・WebPの画像を選んでください");
+  const bytes = Utilities.base64Decode(String(req.data || ""));
+  if (!bytes.length) throw err_("画像データがありません");
+  if (bytes.length > MAX_PHOTO_BYTES) throw err_("画像が大きすぎます");
+  const ext = mime === "image/png" ? "png" : mime === "image/webp" ? "webp" : "jpg";
+  const prefix = req.kind === "icon" ? "icon_" : "visit_";
+  const name = prefix + user.user_id + "_" + Utilities.formatDate(new Date(), TZ, "yyyyMMddHHmmss") + "_" + Math.floor(Math.random() * 1000) + "." + ext;
+  const file = photoFolder_().createFile(Utilities.newBlob(bytes, mime, name));
+  file.setDescription("owner:" + user.user_id);
+  try { file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (e) { console.warn(e); }
+  return { ok: true, photo_id: file.getId(), size: bytes.length };
+}
+
+/** 保存せずに閉じたときなど、未使用の写真を削除 */
+function deletePhotos_(req, user) {
+  const used = {};
+  rows_(SHEETS.VISITS).filter(r => r.user_id === user.user_id).forEach(r => splitIds_(r.photo_ids).forEach(id => { used[id] = true; }));
+  rows_(SHEETS.THEMES).forEach(t => { if (isImgIcon_(t.icon)) used[String(t.icon).slice(4)] = true; }); // 使用中のアイコン
+  let n = 0;
+  (req.photo_ids || []).map(String).forEach(id => { if (!used[id] && trashPhoto_(id, user)) n++; });
+  return { ok: true, deleted: n };
+}
+
+function ownPhoto_(id, user) {
+  try { return DriveApp.getFileById(id).getDescription() === "owner:" + user.user_id; } catch (e) { return false; }
+}
+function trashPhoto_(id, user) {
+  try {
+    const f = DriveApp.getFileById(id);
+    if (f.getDescription() !== "owner:" + user.user_id && !isAdmin_(user)) return false;
+    f.setTrashed(true);
+    return true;
+  } catch (e) { return false; }
 }
 
 /* =========================================================

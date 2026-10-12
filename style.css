@@ -407,14 +407,28 @@ body.flying #clouds { opacity: 1; }
 .mg-section { border-top: 2px dashed rgba(30,42,54,.25); padding-top: 14px; margin-top: 14px; }
 .mg-h { margin: 0 0 10px; font-size: 15px; font-weight: 800; }
 .mg-theme-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
-.mg-theme-row, .mg-add { display: grid; grid-template-columns: 56px 1fr auto auto; gap: 6px; align-items: center; }
-.mg-add { grid-template-columns: 56px 1fr auto; padding-top: 8px; border-top: 1px solid #d3c7a8; }
+.mg-theme-row, .mg-add { display: grid; grid-template-columns: 52px 64px 1fr auto auto; gap: 6px; align-items: center; }
+.mg-add { grid-template-columns: 52px 64px 1fr auto; padding-top: 8px; border-top: 1px solid #d3c7a8; }
 .mg-theme-row input, .mg-add input {
   width: 100%; padding: 8px 10px; border-radius: var(--radius-s);
   border: 1.5px solid #b9ad8f; background: var(--white); color: var(--ink);
 }
 .mg-theme-row input:disabled { background: var(--paper-2); color: #6f7780; }
-.mg-theme-row input:first-child, .mg-add input:first-child { text-align: center; font-size: 18px; padding: 6px 4px; }
+.mg-theme-row .mg-icon, .mg-add #newThemeIcon { text-align: center; font-size: 18px; padding: 6px 4px; }
+.mg-ico-pick {
+  position: relative; width: 48px; height: 48px; border-radius: 10px; cursor: pointer;
+  border: 1.5px dashed #b9ad8f; background: var(--white); display: grid; place-items: center;
+}
+.mg-ico-pick:hover { border-color: var(--navy); }
+.mg-ico-pick.disabled { cursor: not-allowed; opacity: .6; border-style: solid; }
+.mg-ico-prev { display: grid; place-items: center; width: 100%; height: 100%; font-size: 24px; }
+.mg-ico-prev .t-ico { width: 42px; height: 42px; border-radius: 8px; }
+.mg-ico-cam {
+  position: absolute; right: -6px; bottom: -6px; width: 22px; height: 22px; border-radius: 50%;
+  display: grid; place-items: center; font-size: 12px; background: var(--ink); color: var(--white);
+}
+.mg-ico-pick.disabled .mg-ico-cam { display: none; }
+.mg-ico-pick.busy .mg-ico-prev { opacity: .35; }
 .mg-lock { font-size: 12px; color: #6f7780; white-space: nowrap; }
 .mg-all { margin: 0 0 8px; }
 .mg-spot-list {
@@ -428,6 +442,77 @@ body.flying #clouds { opacity: 1; }
 .mg-spot .mg-name { flex: 1; font-weight: 700; }
 .mg-spot small { color: #6f7780; white-space: nowrap; }
 .mg-empty { padding: 16px; text-align: center; color: #6f7780; font-size: 13px; }
+
+/* 行ったところ：カード内 */
+.visit-block { margin: 0 0 14px; padding: 12px; border-radius: 10px; border: 2px dashed #b9ad8f; background: rgba(255,255,255,.55); }
+.visit-block.done { border: 2px solid #3b7d3a; background: #e8f3e3; }
+.btn-visit {
+  width: 100%; padding: 11px; border-radius: var(--radius-s); border: 2px solid #3b7d3a;
+  background: var(--white); color: #2d6a2c; font-weight: 800; font-size: 15px;
+}
+.btn-visit:hover { background: #e8f3e3; }
+.visit-badge { font-weight: 800; color: #2d6a2c; margin-bottom: 6px; }
+.visit-memo { margin: 6px 0; font-size: 13.5px; line-height: 1.65; white-space: pre-wrap; }
+.visit-thumbs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin: 6px 0; }
+.visit-thumbs button, .visit-photos .vp {
+  position: relative; aspect-ratio: 1; padding: 0; border: 0; border-radius: 6px; overflow: hidden; background: var(--paper-2);
+}
+.visit-thumbs img, .visit-photos img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.visit-thumbs .more { display: grid; place-items: center; font-weight: 800; color: var(--ink); }
+
+/* 記録の編集 */
+.visit-box { width: min(560px, 100%); }
+.visit-spot { margin: -6px 0 12px; font-family: var(--font-shout); font-size: 18px; }
+.visit-photos { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.visit-photos:empty { display: none; }
+.vp .vp-del {
+  position: absolute; right: 4px; top: 4px; width: 28px; height: 28px; border-radius: 50%;
+  border: 0; background: rgba(30,42,54,.8); color: var(--white); font-size: 16px; line-height: 1;
+}
+.vp .vp-state { position: absolute; inset: 0; display: grid; place-items: center; font-size: 12px; font-weight: 700; color: var(--ink); background: rgba(241,234,216,.85); }
+
+/* 行ったところリスト */
+.visited-box { width: min(760px, 100%); }
+.visited-summary { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.vs-chip {
+  flex: 1 1 160px; padding: 10px 12px; border-radius: 10px; border: 1.5px solid var(--ink);
+  background: var(--white); color: var(--ink); text-align: left;
+}
+.vs-chip.active { background: var(--ink); color: var(--paper); }
+.vs-chip b { display: block; font-size: 13.5px; }
+.vs-chip span { font-size: 12px; }
+.vs-bar { height: 6px; border-radius: 3px; background: #e4d9bd; margin-top: 6px; overflow: hidden; }
+.vs-bar i { display: block; height: 100%; background: #3b7d3a; }
+.visited-list { display: flex; flex-direction: column; gap: 8px; }
+.visited-item {
+  display: grid; grid-template-columns: 84px 1fr auto; gap: 12px; align-items: center;
+  padding: 10px; border-radius: 10px; background: var(--white); border: 1.5px solid #d3c7a8;
+}
+.vi-thumb { width: 84px; height: 84px; border-radius: 8px; overflow: hidden; border: 0; padding: 0; background: var(--paper-2); font-size: 30px; }
+.vi-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.vi-body { min-width: 0; }
+.vi-body b { font-size: 15.5px; }
+.vi-body small { display: block; color: #5d6874; margin-top: 2px; }
+.vi-body p { margin: 4px 0 0; font-size: 13px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vi-actions { display: flex; flex-direction: column; gap: 4px; }
+.vi-actions .chip-btn { padding: 5px 12px; }
+.visited-empty { padding: 26px; text-align: center; color: #6f7780; }
+
+/* 写真ビューア */
+.photo-viewer {
+  position: fixed; inset: 0; z-index: 75; background: rgba(5,12,20,.92);
+  display: flex; align-items: center; justify-content: center;
+  padding: calc(50px + var(--safe-t)) 56px calc(50px + var(--safe-b));
+}
+.photo-viewer img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 4px; box-shadow: 0 10px 40px rgba(0,0,0,.6); }
+.pv-btn {
+  position: absolute; width: 46px; height: 46px; border-radius: 50%; border: 0;
+  background: rgba(241,234,216,.9); color: var(--ink); font-size: 28px; line-height: 1;
+}
+.pv-close { right: 14px; top: calc(14px + var(--safe-t)); font-size: 24px; }
+.pv-prev { left: 8px; top: 50%; transform: translateY(-50%); }
+.pv-next { right: 8px; top: 50%; transform: translateY(-50%); }
+.pv-caption { position: absolute; left: 0; right: 0; bottom: calc(12px + var(--safe-b)); margin: 0; text-align: center; color: var(--paper); font-weight: 700; }
 
 /* クイズ */
 .quiz-q { font-family: var(--font-shout); font-size: 20px; line-height: 1.55; margin: 0 0 16px; }
@@ -511,9 +596,15 @@ body.flying #clouds { opacity: 1; }
 @media (max-width: 700px) {
   .import-label { display: none; }
   #btnManage { display: none; }
+  .visited-item { grid-template-columns: 64px 1fr; }
+  .vi-thumb { width: 64px; height: 64px; }
+  .vi-actions { grid-column: 1 / -1; flex-direction: row; }
+  .vi-actions .chip-btn { flex: 1; }
   .mg-theme-row { display: flex; flex-wrap: wrap; }
-  .mg-theme-row input:first-child { width: 48px; flex: none; }
-  .mg-theme-row input:nth-child(2) { flex: 1; min-width: 0; width: auto; }
+  .mg-theme-row .mg-icon { width: 64px; flex: none; }
+  .mg-theme-row .mg-tname { flex: 1; min-width: 0; width: auto; }
+  .mg-add { grid-template-columns: 52px 64px 1fr; }
+  .mg-add #btnAddTheme { grid-column: 1 / -1; }
   .mg-theme-row .chip-btn { flex: 1; }
   .import-btn { width: 38px; padding: 0; justify-content: center; }
   .imp-tab { font-size: 12px; }
@@ -547,3 +638,13 @@ body.flying #clouds { opacity: 1; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+#visitModal { z-index: 55; }
+
+/* カテゴリアイコン（絵文字・画像） */
+.t-ico { width: 22px; height: 22px; border-radius: 5px; object-fit: cover; vertical-align: middle; display: inline-block; }
+.t-ico-emoji { display: inline-block; line-height: 1; }
+.theme-tab .t-ico { width: 22px; height: 22px; margin: -3px 0; }
+.card-theme .t-ico { width: 18px; height: 18px; border-radius: 4px; margin-right: 2px; }
+.vs-chip .t-ico { width: 20px; height: 20px; }
+.vi-body small .t-ico { width: 16px; height: 16px; border-radius: 3px; }
+.vi-thumb .t-ico { width: 100%; height: 100%; border-radius: 0; }

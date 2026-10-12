@@ -12,9 +12,21 @@
   const rand = (a, b) => a + Math.random() * (b - a);
   const pickOne = arr => arr[Math.floor(Math.random() * arr.length)];
 
+  /* カテゴリアイコン：絵文字 または "img:ドライブのファイルID" */
+  const isImgIcon = icon => /^img:[\w-]{10,}$/.test(String(icon || ""));
+  function iconHtml(icon) {
+    if (isImgIcon(icon)) {
+      const id = String(icon).slice(4);
+      return `<img class="t-ico" src="https://drive.google.com/thumbnail?id=${encodeURIComponent(id)}&sz=w128" alt="" referrerpolicy="no-referrer" onerror="this.onerror=null;this.src='https://lh3.googleusercontent.com/d/${esc(id)}=w128'">`;
+    }
+    return `<span class="t-ico-emoji">${esc(icon || "📍")}</span>`;
+  }
+  const iconText = icon => (isImgIcon(icon) ? "" : (icon || "📍") + " ");
+
   const COLOR_PIN = C.Color.fromCssColorString("#d9442b");
   const COLOR_HI = C.Color.fromCssColorString("#f4c867");
   const COLOR_CUR = C.Color.fromCssColorString("#3fa796");
+  const COLOR_VISITED = C.Color.fromCssColorString("#3b7d3a");
 
   /* ---------- 状態 ---------- */
   const S = {
@@ -32,7 +44,10 @@
     orbitOff: null,     // 旋回リスナー解除関数
     orbitView: null,
     muted: localStorage.getItem(APP_CONFIG.STORAGE_KEY_MUTE) === "1",
-    importDraft: []
+    importDraft: [],
+    visits: new Map(),  // spot_id -> 行ったところの記録
+    themeTotals: {},
+    cardSpot: null
   };
 
   /* =========================================================
@@ -237,12 +252,13 @@
   async function start(user) {
     if (S.started) return;
     S.started = true;
-    $("#appTitle").textContent = APP_CONFIG.APP_TITLE.replace(/^あの場所は今_/, "");
+    $("#appTitle").textContent = APP_CONFIG.APP_TITLE;
     await initViewer();
     bindUI();
     updateMuteBtn();
+    await loadVisits();
     await loadThemes();
-    Voice.say(`よく来たな、${user?.display_name || "搭乗者"}！ワシがイーグル隊長だ！今日はどこへ飛ぶ？`);
+    Voice.say(`よく来たな、${user?.display_name || "搭乗者"}！鷲の目紀行の案内役、イーグル隊長だ！今日はどこへ飛ぶ？`);
   }
 
   async function initViewer() {
@@ -341,6 +357,7 @@
     // 取り込みモーダル
     bindImportUI();
     bindManageUI();
+    bindVisitUI();
 
     // Escで閉じる
     document.addEventListener("keydown", e => {
@@ -387,10 +404,10 @@
 
   function renderThemeTabs() {
     $("#themeTabs").innerHTML = S.themes.map(t =>
-      `<button class="theme-tab ${t.theme_id === S.themeId ? "active" : ""}" data-id="${esc(t.theme_id)}">${esc(t.icon || "📍")} ${esc(t.theme_name)}</button>`).join("");
+      `<button class="theme-tab ${t.theme_id === S.themeId ? "active" : ""}" data-id="${esc(t.theme_id)}">${iconHtml(t.icon)} ${esc(t.theme_name)}</button>`).join("");
     $$("#themeTabs .theme-tab").forEach(b => b.addEventListener("click", () => selectTheme(b.dataset.id)));
     $("#themeSelect").innerHTML = S.themes.map(t =>
-      `<option value="${esc(t.theme_id)}">${esc(t.icon || "📍")} ${esc(t.theme_name)}</option>`).join("");
+      `<option value="${esc(t.theme_id)}">${esc(iconText(t.icon))}${esc(t.theme_name)}</option>`).join("");
     if (S.themeId) $("#themeSelect").value = S.themeId;
   }
 
@@ -438,7 +455,7 @@
           disableDepthTestDistance: Number.POSITIVE_INFINITY
         },
         label: {
-          text: sp.name,
+          text: pinLabel(sp),
           font: '700 14px "M PLUS 1p", sans-serif',
           fillColor: C.Color.WHITE, outlineColor: C.Color.BLACK, outlineWidth: 3,
           style: C.LabelStyle.FILL_AND_OUTLINE,
@@ -454,11 +471,19 @@
     });
   }
 
+  /** sp を渡すとそのピンだけ表示、null で全ピンを表示 */
+  function showOnlyPin(sp) {
+    S.entities.forEach((e, id) => { e.show = !sp || id === sp.spot_id; });
+  }
+
+  function pinLabel(sp) { return S.visits.has(sp.spot_id) ? `✔ ${sp.name}` : sp.name; }
+
   function setPin(sp, mode) {
     const e = S.entities.get(sp.spot_id);
     if (!e) return;
+    e.label.text = pinLabel(sp);
     const style = {
-      normal: [14, COLOR_PIN],
+      normal: [14, S.visits.has(sp.spot_id) ? COLOR_VISITED : COLOR_PIN],
       hi: [28, COLOR_HI],
       current: [20, COLOR_CUR]
     }[mode];
@@ -560,6 +585,7 @@
     $("#hudTarget").textContent = `→ ${sp.name}`;
 
     S.spots.forEach(p => setPin(p, p.spot_id === sp.spot_id ? "hi" : "normal"));
+    showOnlyPin(sp);   // 飛行中は目的地以外のピンを隠す
     document.body.classList.add("flying");
     Sfx.wind(true);
 
@@ -586,7 +612,8 @@
     Sfx.wind(false);
     Sfx.chime();
 
-    // 到着
+    // 到着：ほかのピンを再表示
+    showOnlyPin(null);
     S.current = sp;
     refreshPinColors();
     $("#hudTarget").textContent = sp.name;
@@ -837,7 +864,7 @@
    * ========================================================= */
   function showCard(sp, mode, comment = "") {
     const th = currentTheme();
-    $("#cardTheme").textContent = `${th.icon || "📍"} ${th.theme_name || ""}`;
+    $("#cardTheme").innerHTML = `${iconHtml(th.icon)} ${esc(th.theme_name || "")}`;
     $("#cardName").textContent = sp.name;
     $("#cardCoords").textContent = `${sp.lat.toFixed(4)}, ${sp.lng.toFixed(4)}　高度 ${Math.round(sp.altitude || 0)} m`;
     $("#cardTags").innerHTML = String(sp.tags || "").split(",").map(t => t.trim()).filter(Boolean)
@@ -847,6 +874,7 @@
     if (mode === "preview") {
       body.innerHTML = `
         <button class="btn-fly" id="btnFlyHere">ここへ飛ぶ！</button>
+        <div id="cardVisit" style="margin-top:12px"></div>
         <div id="cardWiki"></div>`;
       $("#btnFlyHere").addEventListener("click", () => { Voice.reset(); flyToSpot(sp); });
     } else if (mode === "depart") {
@@ -864,6 +892,7 @@
           <button class="chip-btn" id="btnOrbit">🔄 旋回</button>
           ${sp.video_url ? `<button class="chip-btn" id="btnVideo">🎬 空撮映像</button>` : ""}
         </div>
+        <div id="cardVisit"></div>
         ${wikiHtml}
         <div class="card-section-title">次のフライト候補</div>
         <div class="next-list">
@@ -883,6 +912,8 @@
     }
     $("#spotCard").classList.remove("hidden");
     document.body.classList.add("card-open");
+    S.cardSpot = sp;
+    renderCardVisit(sp);
     if (mode === "preview") loadWiki(sp);
   }
 
@@ -999,7 +1030,7 @@
   function openImport() {
     const sel = $("#importTheme").value || S.themeId;
     $("#importTheme").innerHTML =
-      S.themes.map(t => `<option value="${esc(t.theme_id)}" ${t.theme_id === sel ? "selected" : ""}>${esc(t.icon || "📍")} ${esc(t.theme_name)}</option>`).join("") +
+      S.themes.map(t => `<option value="${esc(t.theme_id)}" ${t.theme_id === sel ? "selected" : ""}>${esc(iconText(t.icon))}${esc(t.theme_name)}</option>`).join("") +
       `<option value="__new__">＋ 新しいテーマを作る</option>`;
     $("#newThemeFields").classList.toggle("hidden", $("#importTheme").value !== "__new__");
     $("#importModal").classList.remove("hidden");
@@ -1269,12 +1300,45 @@
   /* =========================================================
    * カテゴリ・スポット管理（追加・名前変更・一括削除）
    * ========================================================= */
-  const M = { themeId: "", batch: "all", spots: [], sel: new Set(), isAdmin: false };
+  const M = { themeId: "", batch: "all", spots: [], sel: new Set(), isAdmin: false, newIcon: "", pendingIcons: [] };
 
   function bindManageUI() {
     $("#btnManage").addEventListener("click", openManage);
     $("#btnManageMenu").addEventListener("click", openManage);
-    $("#manageClose").addEventListener("click", () => $("#manageModal").classList.add("hidden"));
+    $("#manageClose").addEventListener("click", closeManage);
+    // アイコン：絵文字の入力
+    $("#mgThemeList").addEventListener("input", e => {
+      if (!e.target.classList.contains("mg-icon")) return;
+      const row = e.target.closest(".mg-theme-row");
+      row.dataset.icon = e.target.value.trim() || "📍";
+      $(".mg-ico-prev", row).innerHTML = iconHtml(row.dataset.icon);
+    });
+    // アイコン：画像の選択
+    $("#mgThemeList").addEventListener("change", async e => {
+      if (!e.target.classList.contains("mg-ico-file")) return;
+      const file = e.target.files[0];
+      e.target.value = "";
+      const row = e.target.closest(".mg-theme-row");
+      const icon = await uploadIconFile(file, e.target.closest(".mg-ico-pick"));
+      if (!icon) return;
+      row.dataset.icon = icon;
+      $(".mg-icon", row).value = "";
+      $(".mg-ico-prev", row).innerHTML = iconHtml(icon);
+      showToast("画像を選びました。「保存」を押すと確定します");
+    });
+    $("#newThemeIcon").addEventListener("input", e => {
+      M.newIcon = "";
+      $("#newIconPreview").innerHTML = iconHtml(e.target.value.trim() || "📍");
+    });
+    $("#newIconFile").addEventListener("change", async e => {
+      const file = e.target.files[0];
+      e.target.value = "";
+      const icon = await uploadIconFile(file, e.target.closest(".mg-ico-pick"));
+      if (!icon) return;
+      M.newIcon = icon;
+      $("#newThemeIcon").value = "";
+      $("#newIconPreview").innerHTML = iconHtml(icon);
+    });
     $("#mgTheme").addEventListener("change", e => loadManageSpots(e.target.value));
     $("#mgBatch").addEventListener("change", e => { M.batch = e.target.value; M.sel.clear(); renderManageSpots(); });
     $("#mgAll").addEventListener("change", e => {
@@ -1293,6 +1357,59 @@
     $("#mgThemeList").addEventListener("click", onManageThemeClick);
   }
 
+  /** 画像を正方形256pxに切り抜いてアップロード → "img:ID" を返す */
+  async function uploadIconFile(file, pick) {
+    if (!file) return "";
+    if (pick) pick.classList.add("busy");
+    try {
+      const blob = await resizeIcon(file);
+      const data = await blobToBase64(blob);
+      const r = await Api.call("uploadPhoto", { data, mime: blob.type, kind: "icon" });
+      M.pendingIcons.push(r.photo_id);
+      return "img:" + r.photo_id;
+    } catch (e) {
+      showToast(e.message || "画像を読み込めませんでした", 5000);
+      return "";
+    } finally {
+      if (pick) pick.classList.remove("busy");
+    }
+  }
+
+  async function resizeIcon(file) {
+    let src;
+    try { src = await createImageBitmap(file, { imageOrientation: "from-image" }); }
+    catch (e) {
+      src = await new Promise((res, rej) => {
+        const img = new Image();
+        img.onload = () => res(img);
+        img.onerror = () => rej(new Error("この形式の画像は読み込めません（JPEG・PNGをお使いください）"));
+        img.src = URL.createObjectURL(file);
+      });
+    }
+    const size = 256, side = Math.min(src.width, src.height);
+    const sx = (src.width - side) / 2, sy = (src.height - side) / 2;
+    const cv = document.createElement("canvas");
+    cv.width = size; cv.height = size;
+    const ctx = cv.getContext("2d");
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(src, sx, sy, side, side, 0, 0, size, size);
+    if (src.close) src.close();
+    let blob = await new Promise(res => cv.toBlob(res, "image/png"));        // 透過を保つPNG
+    if (blob.size > 250 * 1024) blob = await new Promise(res => cv.toBlob(res, "image/webp", 0.9));
+    return blob;
+  }
+
+  /** 閉じるとき、選んだが保存しなかったアイコン画像を片付ける */
+  async function closeManage() {
+    $("#manageModal").classList.add("hidden");
+    const used = new Set(S.themes.map(t => t.icon).filter(isImgIcon).map(i => i.slice(4)));
+    const unused = M.pendingIcons.filter(id => !used.has(id));
+    M.pendingIcons = [];
+    M.newIcon = "";
+    $("#newIconPreview").innerHTML = iconHtml($("#newThemeIcon").value.trim() || "📍");
+    if (unused.length) Api.call("deletePhotos", { photo_ids: unused }).catch(() => {});
+  }
+
   function openManage() {
     const admin = !!(Auth.user && Auth.user.is_admin);
     $("#mgRole").textContent = admin
@@ -1305,22 +1422,27 @@
 
   function renderManageThemes() {
     $("#mgThemeList").innerHTML = S.themes.map(t => `
-      <div class="mg-theme-row" data-id="${esc(t.theme_id)}">
-        <input type="text" class="mg-icon" maxlength="4" value="${esc(t.icon || "📍")}" aria-label="アイコン" ${t.can_edit ? "" : "disabled"}>
+      <div class="mg-theme-row" data-id="${esc(t.theme_id)}" data-icon="${esc(t.icon || "📍")}">
+        <label class="mg-ico-pick ${t.can_edit ? "" : "disabled"}" title="${t.can_edit ? "画像をアイコンにする" : ""}">
+          <span class="mg-ico-prev">${iconHtml(t.icon)}</span>
+          <span class="mg-ico-cam" aria-hidden="true">📷</span>
+          <input type="file" class="mg-ico-file" accept="image/*" hidden ${t.can_edit ? "" : "disabled"}>
+        </label>
+        <input type="text" class="mg-icon" maxlength="8" value="${isImgIcon(t.icon) ? "" : esc(t.icon || "📍")}" placeholder="絵文字" aria-label="アイコン（絵文字）" ${t.can_edit ? "" : "disabled"}>
         <input type="text" class="mg-tname" maxlength="30" value="${esc(t.theme_name)}" aria-label="カテゴリ名" ${t.can_edit ? "" : "disabled"}>
         ${t.can_edit
-          ? `<button class="chip-btn" data-act="rename">名前を保存</button>
+          ? `<button class="chip-btn" data-act="rename">保存</button>
              <button class="chip-btn danger" data-act="delete">削除</button>`
           : `<span class="mg-lock" style="grid-column: span 2">🔒 変更できません</span>`}
       </div>`).join("");
     $("#mgTheme").innerHTML = S.themes.map(t =>
-      `<option value="${esc(t.theme_id)}">${esc(t.icon || "📍")} ${esc(t.theme_name)}</option>`).join("");
+      `<option value="${esc(t.theme_id)}">${esc(iconText(t.icon))}${esc(t.theme_name)}</option>`).join("");
     if (M.themeId) $("#mgTheme").value = M.themeId;
   }
 
   async function addTheme() {
     const theme_name = $("#newThemeName").value.trim();
-    const icon = $("#newThemeIcon").value.trim() || "📍";
+    const icon = M.newIcon || $("#newThemeIcon").value.trim() || "📍";
     if (!theme_name) return showToast("新しいカテゴリ名を入力してください");
     showLoading("カテゴリを追加中…");
     try {
@@ -1328,6 +1450,8 @@
       S.themes.push(r.theme);
       S.spotsCache[r.theme.theme_id] = [];
       $("#newThemeName").value = ""; $("#newThemeIcon").value = "";
+      M.newIcon = "";
+      $("#newIconPreview").innerHTML = iconHtml("📍");
       renderThemeTabs();
       renderManageThemes();
       showToast(`カテゴリ「${theme_name}」を追加しました。＋スポット取込から中身を入れられます`, 4500);
@@ -1346,15 +1470,16 @@
 
     if (btn.dataset.act === "rename") {
       const theme_name = $(".mg-tname", row).value.trim();
-      const icon = $(".mg-icon", row).value.trim() || "📍";
+      const icon = row.dataset.icon || "📍";
       if (!theme_name) return showToast("カテゴリ名を入力してください");
-      showLoading("名前を変更中…");
+      showLoading("カテゴリを保存中…");
       try {
         await Api.call("updateTheme", { theme_id: id, theme_name, icon });
         theme.theme_name = theme_name; theme.icon = icon;
         renderThemeTabs();
         renderManageThemes();
-        showToast("カテゴリ名を変更しました");
+        if (S.cardSpot && S.themeId === id && !$("#spotCard").classList.contains("hidden")) $("#cardTheme").innerHTML = `${iconHtml(icon)} ${esc(theme_name)}`;
+        showToast("カテゴリを保存しました");
       } catch (err) {
         showToast(err.message, 5000);
       } finally { hideLoading(); }
@@ -1464,6 +1589,401 @@
       showToast(e.message, 5000);
     }
   }
+
+  /* =========================================================
+   * 行ったところ（チェック・メモ・写真）
+   * ========================================================= */
+  const PHOTO_MAX_EDGE = 1600;     // 長辺の最大px
+  const PHOTO_QUALITY = 0.82;      // JPEG画質
+  const PHOTO_TARGET_BYTES = 600 * 1024;
+  const MAX_PHOTOS = 6;
+  const E = { visit: null, spot: null, photos: [], newIds: [], uploading: 0 }; // 編集中の状態
+  const PV = { list: [], i: 0, caption: "" };
+
+  const photoUrl = (id, w = 400) => `https://drive.google.com/thumbnail?id=${encodeURIComponent(id)}&sz=w${w}`;
+  const photoImg = (id, w, alt = "") =>
+    `<img src="${photoUrl(id, w)}" alt="${esc(alt)}" loading="lazy" referrerpolicy="no-referrer" onerror="this.onerror=null;this.src='https://lh3.googleusercontent.com/d/${esc(id)}=w${w}'">`;
+  const fmtDay = d => (d ? d.replace(/-/g, "/") : "");
+  const today = () => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  };
+
+  function bindVisitUI() {
+    $("#btnVisited").addEventListener("click", openVisitedList);
+    $("#visitedClose").addEventListener("click", () => $("#visitedModal").classList.add("hidden"));
+    $("#visitedFilter").addEventListener("change", renderVisitedList);
+    $("#visitedSort").addEventListener("change", renderVisitedList);
+    $("#visitedSummary").addEventListener("click", e => {
+      const b = e.target.closest("[data-theme]");
+      if (!b) return;
+      $("#visitedFilter").value = b.dataset.theme;
+      renderVisitedList();
+    });
+    $("#visitedList").addEventListener("click", onVisitedListClick);
+
+    $("#visitClose").addEventListener("click", closeVisitEditor);
+    $("#visitSave").addEventListener("click", saveVisitEditor);
+    $("#visitDelete").addEventListener("click", () => E.visit && removeVisit(E.visit, true));
+    $("#visitFile").addEventListener("change", e => { addPhotos([...e.target.files]); e.target.value = ""; });
+    $("#visitPhotos").addEventListener("click", e => {
+      const del = e.target.closest(".vp-del");
+      if (del) {
+        const id = del.dataset.id;
+        E.photos = E.photos.filter(p => p.id !== id);
+        renderEditorPhotos();
+        return;
+      }
+      const img = e.target.closest(".vp[data-id]");
+      if (img) openViewer(E.photos.filter(p => p.id).map(p => p.id), E.photos.findIndex(p => p.id === img.dataset.id), E.spot ? E.spot.name : "");
+    });
+
+    // 写真ビューア
+    $("#pvClose").addEventListener("click", closeViewer);
+    $("#pvPrev").addEventListener("click", () => stepViewer(-1));
+    $("#pvNext").addEventListener("click", () => stepViewer(1));
+    $("#photoViewer").addEventListener("click", e => { if (e.target.id === "photoViewer") closeViewer(); });
+    document.addEventListener("keydown", e => {
+      if ($("#photoViewer").classList.contains("hidden")) return;
+      if (e.key === "ArrowLeft") stepViewer(-1);
+      if (e.key === "ArrowRight") stepViewer(1);
+      if (e.key === "Escape") closeViewer();
+    });
+  }
+
+  async function loadVisits() {
+    try {
+      const r = await Api.call("getVisits");
+      S.visits = new Map((r.visits || []).map(v => [v.spot_id, v]));
+      S.themeTotals = r.theme_totals || {};
+    } catch (e) {
+      debugLog("visits load failed", e);
+    }
+  }
+
+  function findSpot(spotId) {
+    for (const id in S.spotsCache) {
+      const sp = (S.spotsCache[id] || []).find(p => p.spot_id === spotId);
+      if (sp) return sp;
+    }
+    return null;
+  }
+
+  function afterVisitChange(spotId) {
+    const sp = S.spots.find(p => p.spot_id === spotId);
+    if (sp) setPin(sp, S.current && S.current.spot_id === spotId ? "current" : "normal");
+    if (S.cardSpot && S.cardSpot.spot_id === spotId && !$("#spotCard").classList.contains("hidden")) renderCardVisit(S.cardSpot);
+    if (!$("#visitedModal").classList.contains("hidden")) renderVisitedList();
+  }
+
+  /* ---------- カード内の表示 ---------- */
+  function renderCardVisit(sp) {
+    const box = $("#cardVisit");
+    if (!box) return;
+    const v = S.visits.get(sp.spot_id);
+    if (!v) {
+      box.className = "visit-block";
+      box.innerHTML = `<button class="btn-visit" id="btnCheckVisit">☐ 行ったところにチェック</button>`;
+      $("#btnCheckVisit").addEventListener("click", () => quickCheck(sp));
+      return;
+    }
+    box.className = "visit-block done";
+    const ids = v.photo_ids || [];
+    box.innerHTML = `
+      <div class="visit-badge">✅ 行った！ ${esc(fmtDay(v.visited_on))}</div>
+      ${ids.length ? `<div class="visit-thumbs">${ids.slice(0, 4).map((id, i) =>
+        i === 3 && ids.length > 4
+          ? `<button data-i="3" class="more" aria-label="写真をすべて見る">+${ids.length - 3}</button>`
+          : `<button data-i="${i}" aria-label="写真を拡大">${photoImg(id, 300, sp.name)}</button>`).join("")}</div>` : ""}
+      ${v.memo ? `<p class="visit-memo">${esc(v.memo)}</p>` : ""}
+      <div class="card-actions" style="margin:6px 0 0">
+        <button class="chip-btn" id="btnEditVisit">✏️ ${ids.length || v.memo ? "記録を編集" : "写真・メモを追加"}</button>
+        <button class="chip-btn danger" id="btnUncheckVisit">チェックを外す</button>
+      </div>`;
+    $$(".visit-thumbs button", box).forEach(b => b.addEventListener("click", () => openViewer(ids, +b.dataset.i, sp.name)));
+    $("#btnEditVisit").addEventListener("click", () => openVisitEditor(sp, v));
+    $("#btnUncheckVisit").addEventListener("click", () => removeVisit(v, false));
+  }
+
+  async function quickCheck(sp) {
+    const btn = $("#btnCheckVisit");
+    if (btn) { btn.disabled = true; btn.textContent = "記録中…"; }
+    try {
+      const r = await Api.call("saveVisit", { spot_id: sp.spot_id, visited_on: today() });
+      S.visits.set(sp.spot_id, r.visit);
+      afterVisitChange(sp.spot_id);
+      Voice.say(pickOne([
+        `おお、${sp.name}に行ったことがあるのか！さすがだな！思い出の写真もワシに見せてくれ！`,
+        `${sp.name}、制覇だな！その時の写真があれば貼っておくのだぞ！`,
+        `やるではないか！${sp.name}はワシも大好きな場所だぞ！`
+      ]));
+      showToast("行ったところにチェックしました");
+    } catch (e) {
+      showToast(e.message, 5000);
+      if (btn) { btn.disabled = false; btn.textContent = "☐ 行ったところにチェック"; }
+    }
+  }
+
+  async function removeVisit(v, fromEditor) {
+    const n = (v.photo_ids || []).length;
+    if (!confirm(`「${v.spot_name}」のチェックを外します。${n ? `\n写真${n}枚とメモも削除され、` : "\nメモも削除され、"}元に戻せません。よろしいですか？`)) return;
+    showLoading("記録を削除中…");
+    try {
+      await Api.call("deleteVisit", { visit_id: v.visit_id });
+      S.visits.delete(v.spot_id);
+      if (fromEditor) { await discardNewPhotos(); hideVisitModal(); }
+      afterVisitChange(v.spot_id);
+      showToast("チェックを外しました");
+    } catch (e) {
+      showToast(e.message, 5000);
+    } finally { hideLoading(); }
+  }
+
+  /* ---------- 記録の編集モーダル ---------- */
+  function openVisitEditor(sp, v) {
+    E.spot = sp; E.visit = v || null;
+    E.photos = (v && v.photo_ids ? v.photo_ids : []).map(id => ({ id }));
+    E.newIds = []; E.uploading = 0;
+    $("#visitTitle").textContent = v ? "行ったところの記録を編集" : "行ったところを記録";
+    $("#visitSpotName").textContent = sp.name || (v && v.spot_name) || "";
+    $("#visitDate").value = (v && v.visited_on) || today();
+    $("#visitDate").max = today();
+    $("#visitMemo").value = (v && v.memo) || "";
+    $("#visitDelete").classList.toggle("hidden", !v);
+    renderEditorPhotos();
+    $("#visitModal").classList.remove("hidden");
+  }
+
+  function hideVisitModal() { $("#visitModal").classList.add("hidden"); }
+
+  async function closeVisitEditor() {
+    if (E.uploading) return showToast("写真を送信中です。少しお待ちください");
+    await discardNewPhotos();
+    hideVisitModal();
+  }
+
+  /** 保存しなかった新しい写真をDriveから削除 */
+  async function discardNewPhotos() {
+    const unused = E.newIds.slice();
+    E.newIds = [];
+    if (unused.length) { try { await Api.call("deletePhotos", { photo_ids: unused }); } catch (e) { /* 次回で問題なし */ } }
+  }
+
+  function renderEditorPhotos() {
+    $("#visitPhotos").innerHTML = E.photos.map(p => p.id
+      ? `<div class="vp" data-id="${esc(p.id)}">${photoImg(p.id, 400)}<button type="button" class="vp-del" data-id="${esc(p.id)}" aria-label="この写真を外す">×</button></div>`
+      : `<div class="vp">${p.preview ? `<img src="${p.preview}" alt="">` : ""}<span class="vp-state">${esc(p.state || "")}</span></div>`).join("");
+    const full = E.photos.length >= MAX_PHOTOS;
+    $("#visitAddPhoto").classList.toggle("hidden", full);
+    $("#visitSave").disabled = E.uploading > 0;
+  }
+
+  async function addPhotos(files) {
+    const room = MAX_PHOTOS - E.photos.length;
+    if (room <= 0) return showToast(`写真は${MAX_PHOTOS}枚までです`);
+    const list = files.filter(f => /^image\//.test(f.type) || /\.(jpe?g|png|webp|heic|heif)$/i.test(f.name)).slice(0, room);
+    if (files.length > room) showToast(`写真は${MAX_PHOTOS}枚までなので、${room}枚だけ追加します`);
+    for (const f of list) {
+      const slot = { id: "", state: "縮小中…", preview: "" };
+      E.photos.push(slot);
+      E.uploading++;
+      renderEditorPhotos();
+      try {
+        const blob = await resizeImage(f);
+        slot.preview = URL.createObjectURL(blob);
+        slot.state = `送信中…（${Math.round(blob.size / 1024)}KB）`;
+        renderEditorPhotos();
+        const data = await blobToBase64(blob);
+        const r = await Api.call("uploadPhoto", { data, mime: blob.type });
+        if (E.photos.includes(slot)) {
+          slot.id = r.photo_id;
+          E.newIds.push(r.photo_id);
+        } else {
+          Api.call("deletePhotos", { photo_ids: [r.photo_id] }).catch(() => {});
+        }
+      } catch (e) {
+        E.photos = E.photos.filter(p => p !== slot);
+        showToast(e.message || "写真を読み込めませんでした", 5000);
+      } finally {
+        if (slot.preview) URL.revokeObjectURL(slot.preview);
+        E.uploading--;
+        renderEditorPhotos();
+      }
+    }
+  }
+
+  /** 長辺1600px以内・JPEGに縮小（大きすぎる場合は画質を下げて再圧縮） */
+  async function resizeImage(file) {
+    let src;
+    try {
+      src = await createImageBitmap(file, { imageOrientation: "from-image" });
+    } catch (e) {
+      src = await new Promise((res, rej) => {
+        const img = new Image();
+        img.onload = () => res(img);
+        img.onerror = () => rej(new Error("この形式の画像は読み込めません（JPEG・PNGをお使いください）"));
+        img.src = URL.createObjectURL(file);
+      });
+    }
+    const w0 = src.width, h0 = src.height;
+    const encode = (edge, q) => {
+      const scale = Math.min(1, edge / Math.max(w0, h0));
+      const w = Math.round(w0 * scale), h = Math.round(h0 * scale);
+      const cv = document.createElement("canvas");
+      cv.width = w; cv.height = h;
+      const ctx = cv.getContext("2d");
+      ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, w, h);  // 透過PNG対策
+      ctx.imageSmoothingQuality = "high";
+      ctx.drawImage(src, 0, 0, w, h);
+      return new Promise(res => cv.toBlob(res, "image/jpeg", q));
+    };
+    let blob = await encode(PHOTO_MAX_EDGE, PHOTO_QUALITY);
+    if (blob.size > PHOTO_TARGET_BYTES) blob = await encode(PHOTO_MAX_EDGE, 0.72);
+    if (blob.size > PHOTO_TARGET_BYTES * 1.5) blob = await encode(1280, 0.7);
+    if (src.close) src.close();
+    return blob;
+  }
+
+  function blobToBase64(blob) {
+    return new Promise((res, rej) => {
+      const r = new FileReader();
+      r.onload = () => res(String(r.result).split(",")[1]);
+      r.onerror = () => rej(new Error("画像の読み込みに失敗しました"));
+      r.readAsDataURL(blob);
+    });
+  }
+
+  async function saveVisitEditor() {
+    if (E.uploading) return showToast("写真を送信中です。少しお待ちください");
+    const visited_on = $("#visitDate").value || today();
+    if (visited_on > today()) return showToast("行った日に未来の日付は選べません");
+    showLoading("記録を保存中…");
+    try {
+      const r = await Api.call("saveVisit", {
+        visit_id: E.visit ? E.visit.visit_id : "",
+        spot_id: E.spot ? E.spot.spot_id : E.visit.spot_id,
+        visited_on,
+        memo: $("#visitMemo").value,
+        photo_ids: E.photos.filter(p => p.id).map(p => p.id)
+      });
+      E.newIds = [];
+      S.visits.set(r.visit.spot_id, r.visit);
+      hideVisitModal();
+      afterVisitChange(r.visit.spot_id);
+      showToast("記録を保存しました");
+    } catch (e) {
+      showToast(e.message, 5000);
+    } finally { hideLoading(); }
+  }
+
+  /* ---------- 行ったところリスト ---------- */
+  async function openVisitedList() {
+    $("#visitedModal").classList.remove("hidden");
+    $("#visitedList").innerHTML = `<div class="visited-empty">読み込み中…</div>`;
+    await loadVisits();   // 他の端末での変更も反映
+    const sel = $("#visitedFilter").value || "all";
+    $("#visitedFilter").innerHTML = `<option value="all">すべてのカテゴリ</option>` +
+      S.themes.map(t => `<option value="${esc(t.theme_id)}">${esc(iconText(t.icon))}${esc(t.theme_name)}</option>`).join("");
+    $("#visitedFilter").value = [...$("#visitedFilter").options].some(o => o.value === sel) ? sel : "all";
+    renderVisitedList();
+    S.spots.forEach(sp => setPin(sp, S.current && S.current.spot_id === sp.spot_id ? "current" : "normal"));
+  }
+
+  function renderVisitedList() {
+    const all = [...S.visits.values()];
+    const filter = $("#visitedFilter").value || "all";
+
+    // カテゴリごとの達成状況
+    const chips = S.themes.map(t => {
+      const n = all.filter(v => v.theme_id === t.theme_id && v.spot_exists).length;
+      const total = S.themeTotals[t.theme_id] || (S.spotsCache[t.theme_id] || []).length;
+      const pct = total ? Math.round(n / total * 100) : 0;
+      return `<button class="vs-chip ${filter === t.theme_id ? "active" : ""}" data-theme="${esc(t.theme_id)}">
+        <b>${iconHtml(t.icon)} ${esc(t.theme_name)}</b><span>${n} / ${total} か所（${pct}%）</span>
+        <div class="vs-bar"><i style="width:${pct}%"></i></div></button>`;
+    });
+    $("#visitedSummary").innerHTML =
+      `<button class="vs-chip ${filter === "all" ? "active" : ""}" data-theme="all"><b>🌏 すべて</b><span>${all.length} か所</span></button>` + chips.join("");
+
+    let list = filter === "all" ? all : all.filter(v => v.theme_id === filter);
+    const sort = $("#visitedSort").value;
+    list.sort((a, b) =>
+      sort === "name" ? a.spot_name.localeCompare(b.spot_name, "ja")
+        : sort === "old" ? (a.visited_on || "").localeCompare(b.visited_on || "")
+          : (b.visited_on || "").localeCompare(a.visited_on || ""));
+
+    if (!list.length) {
+      $("#visitedList").innerHTML = `<div class="visited-empty">まだ記録がありません。<br>スポットのカードで「行ったところにチェック」を押してみましょう。</div>`;
+      return;
+    }
+    const themeOf = id => S.themes.find(t => t.theme_id === id) || {};
+    $("#visitedList").innerHTML = list.map(v => {
+      const th = themeOf(v.theme_id);
+      const ids = v.photo_ids || [];
+      return `<div class="visited-item" data-spot="${esc(v.spot_id)}">
+        <button class="vi-thumb" data-act="photos" ${ids.length ? "" : "disabled"} aria-label="写真を見る">${ids.length ? photoImg(ids[0], 200, v.spot_name) : iconHtml(th.icon)}</button>
+        <div class="vi-body">
+          <b>${esc(v.spot_name)}</b>${v.spot_exists ? "" : ` <small style="display:inline">（スポット削除済み）</small>`}
+          <small>${th.theme_id ? iconHtml(th.icon) : ""} ${esc(th.theme_name || "")}・${esc(fmtDay(v.visited_on))}${ids.length ? `・📷${ids.length}枚` : ""}</small>
+          ${v.memo ? `<p>${esc(v.memo)}</p>` : ""}
+        </div>
+        <div class="vi-actions">
+          <button class="chip-btn" data-act="fly" ${v.spot_exists ? "" : "disabled"}>🦅 飛ぶ</button>
+          <button class="chip-btn" data-act="edit">✏️ 編集</button>
+          <button class="chip-btn danger" data-act="delete">削除</button>
+        </div>
+      </div>`;
+    }).join("");
+  }
+
+  async function onVisitedListClick(e) {
+    const btn = e.target.closest("[data-act]");
+    if (!btn) return;
+    const spotId = btn.closest(".visited-item").dataset.spot;
+    const v = S.visits.get(spotId);
+    if (!v) return;
+    const act = btn.dataset.act;
+    if (act === "photos") return openViewer(v.photo_ids, 0, v.spot_name);
+    if (act === "delete") return removeVisit(v, false);
+    if (act === "edit") {
+      const sp = findSpot(spotId) || { spot_id: spotId, name: v.spot_name };
+      return openVisitEditor(sp, v);
+    }
+    if (act === "fly") {
+      if (S.busy) return showToast("飛行中だ！少し待て！");
+      $("#visitedModal").classList.add("hidden");
+      if (v.theme_id !== S.themeId) await selectTheme(v.theme_id, true);
+      const sp = S.spots.find(p => p.spot_id === spotId);
+      if (!sp) return showToast("スポットが見つかりませんでした");
+      Voice.reset();
+      Voice.say(`思い出の${sp.name}へもう一度飛ぶぞ！`);
+      flyToSpot(sp);
+    }
+  }
+
+  /* ---------- 写真ビューア ---------- */
+  function openViewer(ids, i, caption) {
+    if (!ids || !ids.length) return;
+    PV.list = ids; PV.i = Math.max(0, i); PV.caption = caption || "";
+    showViewer();
+    $("#photoViewer").classList.remove("hidden");
+  }
+  function showViewer() {
+    const id = PV.list[PV.i];
+    const img = $("#pvImg");
+    img.onerror = () => { img.onerror = null; img.src = `https://lh3.googleusercontent.com/d/${id}=w1600`; };
+    img.referrerPolicy = "no-referrer";
+    img.src = photoUrl(id, 1600);
+    img.alt = PV.caption;
+    $("#pvCaption").textContent = `${PV.caption}　${PV.i + 1} / ${PV.list.length}`;
+    $("#pvPrev").classList.toggle("hidden", PV.list.length < 2);
+    $("#pvNext").classList.toggle("hidden", PV.list.length < 2);
+  }
+  function stepViewer(d) {
+    PV.i = (PV.i + d + PV.list.length) % PV.list.length;
+    showViewer();
+  }
+  function closeViewer() { $("#photoViewer").classList.add("hidden"); $("#pvImg").src = ""; }
 
   /* ---------- 公開 ---------- */
   window.App = { start };
