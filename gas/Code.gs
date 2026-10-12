@@ -7,6 +7,8 @@
  *
  * スクリプトプロパティ（プロジェクトの設定 → スクリプト プロパティ）
  *   GEMINI_API_KEY : 必須  Gemini APIキー
+ *   GOOGLE_MAPS_API_KEY : 推奨  Google マップのAPIキー（フォトリアル3D・ストリートビュー用）。
+ *                         ログイン済みの会員のブラウザにだけ渡します
  *   GEMINI_MODEL   : 任意  既定 gemini-2.5-flash
  *   TTS_MODEL      : 任意  既定 gemini-2.5-flash-preview-tts
  *   TTS_VOICE      : 任意  既定 Orus（低めで張りのある男性系）
@@ -74,6 +76,7 @@ function doPost(e) {
     }
 
     const actions = {
+      getClientConfig: getClientConfig_,
       getThemes: getThemes_,
       updateTheme: updateTheme_,
       deleteTheme: deleteTheme_,
@@ -332,6 +335,11 @@ function canEdit_(user, createdBy) {
 /* =========================================================
  * テーマ・スポット
  * ========================================================= */
+/** ブラウザで使う設定（ログイン済み会員のみ） */
+function getClientConfig_() {
+  return { ok: true, google_maps_api_key: prop_("GOOGLE_MAPS_API_KEY") };
+}
+
 function getThemes_(req, user) {
   const themes = rows_(SHEETS.THEMES).filter(t => t.theme_id).map(t => ({
     theme_id: t.theme_id, theme_name: t.theme_name, icon: t.icon, default_center: t.default_center,

@@ -255,6 +255,7 @@
     if (S.started) return;
     S.started = true;
     $("#appTitle").textContent = APP_CONFIG.APP_TITLE;
+    await loadClientConfig();
     await initViewer();
     bindUI();
     updateMuteBtn();
@@ -263,13 +264,23 @@
     Voice.say(`よく来たな、${user?.display_name || "搭乗者"}！鷲の目紀行の案内役、イーグル隊長だ！今日はどこへ飛ぶ？`);
   }
 
+  /** GASのスクリプトプロパティから地図用APIキーなどを受け取る */
+  async function loadClientConfig() {
+    try {
+      const r = await Api.call("getClientConfig");
+      if (r.google_maps_api_key) APP_CONFIG.GOOGLE_MAPS_API_KEY = r.google_maps_api_key;
+    } catch (e) {
+      debugLog("client config failed", e);
+    }
+  }
+
   async function initViewer() {
     if (APP_CONFIG.CESIUM_ION_TOKEN) C.Ion.defaultAccessToken = APP_CONFIG.CESIUM_ION_TOKEN;
     S.terrainOn = !!APP_CONFIG.CESIUM_ION_TOKEN;
 
     // 予備の地表：Esri 航空写真（Google 3D が使えないとき）
     const baseLayer = C.ImageryLayer.fromProviderAsync(
-      C.ArcGisMapServerImageryProvider.fromBasemapType(C.ArcGisBaseMapType.SATELLITE)
+      C.ArcGisMapServerImageryProvider.fromBasemapType(C.ArcGisBaseMapType.SATELLITE, { maximumLevel: 18 }) // 高すぎるズームの404を防ぐ
     );
     baseLayer.errorEvent.addEventListener(() => {
       S.viewer.imageryLayers.addImageryProvider(new C.UrlTemplateImageryProvider({

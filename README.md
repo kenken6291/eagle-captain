@@ -44,6 +44,7 @@ Apps Script の「プロジェクトの設定」→「スクリプト プロパ�
 | `GEMINI_MODEL` | | 既定 `gemini-2.5-flash` |
 | `TTS_MODEL` | | 既定 `gemini-2.5-flash-preview-tts`（新しいTTSモデルを使う場合はここを変更） |
 | `TTS_VOICE` | | 既定 `Orus`。`Charon` `Fenrir` `Algenib` なども試せます |
+| `GOOGLE_MAPS_API_KEY` | 推奨 | Google マップのAPIキー（フォトリアル3D・ストリートビュー）。ログインした会員のブラウザにだけ渡されます |
 | `ADMIN_EMAILS` | 推奨 | 管理者のメールアドレス（複数はカンマ区切り）。全カテゴリの名前変更・削除、全スポットの削除ができます |
 
 設定後、エディタで `testGemini` と `testTts` を実行し、ログにセリフと音声データ長が出れば準備完了です。
@@ -62,7 +63,7 @@ Apps Script の「プロジェクトの設定」→「スクリプト プロパ�
 2. 「認証情報」→ APIキーを作成（または既存キーを編集）。
    - アプリケーションの制限：HTTPリファラー → `https://kenken6291.github.io/*`
    - APIの制限：Map Tiles API
-3. `config.js` の `GOOGLE_MAPS_API_KEY` にキーを貼り付け。
+3. GASのスクリプトプロパティ `GOOGLE_MAPS_API_KEY` にキーを設定（config.js には書きません）。
 4. 利用量に応じた課金があるため、「割り当て」で1日の上限を設定しておくと安心です。
 
 キーが空、または読み込みに失敗した場合は、平面の航空写真で表示されます。
