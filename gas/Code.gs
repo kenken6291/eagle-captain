@@ -867,7 +867,8 @@ function tts_(req) {
   const model = prop_("TTS_MODEL") || "gemini-2.5-flash-preview-tts";
   const voice = prop_("TTS_VOICE") || "Orus";
 
-  const cacheName = sha256_(model + "|" + voice + "|" + text).slice(0, 40) + ".json";
+  // "v2" … 指示文入りで作った古い音声キャッシュを使わないための目印
+  const cacheName = sha256_("v2|" + model + "|" + voice + "|" + text).slice(0, 40) + ".json";
   const folder = ttsFolder_();
   const hit = folder.getFilesByName(cacheName);
   if (hit.hasNext()) {
@@ -876,7 +877,7 @@ function tts_(req) {
   }
 
   const body = {
-    contents: [{ parts: [{ text: "低く張りのある声で、豪快かつ快活に、ベテラン飛行隊長のように勢いよく読み上げてください：\n" + text }] }],
+    contents: [{ parts: [{ text: text }] }],  // セリフだけを送る（指示文を付けると読み上げられてしまうため）
     generationConfig: {
       responseModalities: ["AUDIO"],
       speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } }

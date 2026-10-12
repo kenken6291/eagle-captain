@@ -39,6 +39,7 @@
     spots: [],
     spotsCache: {},
     entities: new Map(),
+    ds: null,           // スポット用データソース（クラスタリング）
     current: null,      // 現在いるスポット
     busy: false,        // 飛行・演出中
     orbitOff: null,     // 旋回リスナー解除関数
@@ -297,7 +298,31 @@
     };
     if (S.terrainOn) opts.terrain = C.Terrain.fromWorldTerrain();
 
+    // 省電力：画面に変化があるときだけ描画する
+    opts.requestRenderMode = true;
+    opts.maximumRenderTimeChange = Infinity;
     const v = new C.Viewer("cesiumContainer", opts);
+    if (IS_MOBILE) v.resolutionScale = Math.min(1, 1.5 / (window.devicePixelRatio || 1)); // スマホは描画解像度を控えめに
+    v.clock.onTick.addEventListener(() => { if (S.orbitOff) v.scene.requestRender(); });
+
+    // スポットはクラスタリング（重なったピンと名前を「数字の丸」にまとめる）
+    S.ds = new C.CustomDataSource("spots");
+    v.dataSources.add(S.ds);
+    const cl = S.ds.clustering;
+    cl.enabled = true;
+    cl.pixelRange = IS_MOBILE ? 46 : 36;
+    cl.minimumClusterSize = 2;
+    cl.clusterPoints = true;
+    cl.clusterLabels = true;
+    cl.clusterBillboards = true;
+    cl.clusterEvent.addEventListener((ids, cluster) => {
+      cluster.label.show = false;
+      cluster.point.show = false;
+      cluster.billboard.show = true;
+      cluster.billboard.image = clusterIcon(ids.length);
+      cluster.billboard.verticalOrigin = C.VerticalOrigin.CENTER;
+      cluster.billboard.disableDepthTestDistance = Number.POSITIVE_INFINITY;
+    });
     S.viewer = v;
     v.scene.globe.depthTestAgainstTerrain = false;
     v.scene.fog.enabled = true;
@@ -311,7 +336,7 @@
       try {
         C.GoogleMaps.defaultApiKey = APP_CONFIG.GOOGLE_MAPS_API_KEY;
         const tileset = await C.createGooglePhotorealistic3DTileset();
-        tileset.maximumScreenSpaceError = 16;
+        tileset.maximumScreenSpaceError = IS_MOBILE ? 28 : 16;  // スマホは少し粗くして軽く
         v.scene.primitives.add(tileset);
         v.scene.globe.show = false;   // 地球の平面画像は隠して3Dだけを見せる
         S.photoreal = true;
@@ -327,6 +352,7 @@
     const handler = new C.ScreenSpaceEventHandler(v.scene.canvas);
     handler.setInputAction(click => {
       const picked = v.scene.pick(click.position);
+      if (picked && Array.isArray(picked.id)) return zoomToCluster(picked.id);
       const sp = picked && picked.id && picked.id.spot;
       if (sp) onPinClick(sp);
     }, C.ScreenSpaceEventType.LEFT_CLICK);
@@ -365,6 +391,31 @@
       updateMuteBtn();
     });
     $("#cardClose").addEventListener("click", hideCard);
+    // スポット検索
+    $("#btnSearch").addEventListener("click", e => {
+      e.stopPropagation();
+      const p = $("#searchPanel");
+      p.classList.toggle("hidden");
+      if (!p.classList.contains("hidden")) { $("#searchInput").focus(); runSearch(); }
+    });
+    let searchTimer = null;
+    $("#searchInput").addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(runSearch, 150); });
+    $("#searchInput").addEventListener("keydown", e => {
+      if (e.key === "Escape") $("#searchPanel").classList.add("hidden");
+      if (e.key === "Enter") { const first = $("#searchResults .sr-item"); if (first) first.click(); }
+    });
+    $("#searchResults").addEventListener("click", e => {
+      const b = e.target.closest(".sr-item");
+      if (!b) return;
+      const sp = S.spots.find(p => p.spot_id === b.dataset.id);
+      if (!sp) return;
+      $("#searchPanel").classList.add("hidden");
+      if (S.busy) return showToast("飛行中だ！少し待て！");
+      Voice.reset();
+      flyToSpot(sp);
+    });
+    $("#searchPanel").addEventListener("click", e => e.stopPropagation());
+    document.addEventListener("click", () => $("#searchPanel").classList.add("hidden"));
     updatePinsBtn();
     $("#btnPins").addEventListener("click", () => {
       S.pinFocus = !S.pinFocus;
@@ -392,6 +443,26 @@
 
     // 初回操作で AudioContext を有効化
     document.addEventListener("pointerdown", () => Sfx.ensure(), { once: true });
+  }
+
+  /** 表示中のテーマ内を名前・タグで検索 */
+  function runSearch() {
+    const q = $("#searchInput").value.trim().toLowerCase();
+    const box = $("#searchResults");
+    const total = S.spots.length;
+    if (!q) {
+      box.innerHTML = `<p class="sr-note">${esc(currentTheme().theme_name || "")}：${total.toLocaleString()}か所。名前やタグを入力してください。</p>`;
+      return;
+    }
+    const words = q.split(/\s+/);
+    const hits = S.spots.filter(sp => {
+      const t = `${sp.name} ${sp.tags || ""}`.toLowerCase();
+      return words.every(w => t.includes(w));
+    });
+    hits.sort((x, y) => (x.name.toLowerCase().startsWith(q) ? 0 : 1) - (y.name.toLowerCase().startsWith(q) ? 0 : 1));
+    box.innerHTML = `<p class="sr-note">${total.toLocaleString()}か所中 ${hits.length.toLocaleString()}件${hits.length > 40 ? "（上位40件を表示）" : ""}</p>` +
+      hits.slice(0, 40).map(sp => `<button class="sr-item" data-id="${esc(sp.spot_id)}">
+        <span>${S.visits.has(sp.spot_id) ? "✔ " : ""}${esc(sp.name)}</span><small>${esc(sp.tags || "")}</small></button>`).join("");
   }
 
   function updateMuteBtn() {
@@ -466,39 +537,92 @@
     }
   }
 
+  const IS_MOBILE = window.matchMedia("(max-width: 700px)").matches;
+  // 名前は、ある程度近づいたときだけ表示（遠くでは点だけ＝文字だらけを防ぐ）
+  const LABEL_NEAR = new C.DistanceDisplayCondition(0, IS_MOBILE ? 150000 : 400000);
+  const clusterIconCache = new Map();
+
+  /** クラスタ（まとめた丸）の画像 */
+  function clusterIcon(n) {
+    const key = n < 10 ? n : n < 50 ? "10+" : n < 100 ? "50+" : n < 500 ? "100+" : "500+";
+    const text = n < 10 ? String(n) : n < 1000 ? String(n) : "999+";
+    const k = key + ":" + text;
+    if (clusterIconCache.has(k)) return clusterIconCache.get(k);
+    const size = n < 10 ? 34 : n < 100 ? 40 : n < 500 ? 46 : 52;
+    const cv = document.createElement("canvas");
+    const r = window.devicePixelRatio > 1 ? 2 : 1;
+    cv.width = cv.height = size * r;
+    const ctx = cv.getContext("2d");
+    ctx.scale(r, r);
+    ctx.beginPath(); ctx.arc(size / 2, size / 2, size / 2 - 2, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(15,39,64,.88)"; ctx.fill();
+    ctx.lineWidth = 3; ctx.strokeStyle = "#e0a93b"; ctx.stroke();
+    ctx.fillStyle = "#f4c867";
+    ctx.font = `800 ${n < 100 ? 15 : 13}px "M PLUS 1p", sans-serif`;
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText(text, size / 2, size / 2 + 1);
+    const url = cv.toDataURL();
+    clusterIconCache.set(k, url);
+    return url;
+  }
+
+  /** まとめた丸を押したら、その範囲へズーム */
+  function zoomToCluster(entities) {
+    if (S.busy) return;
+    const now = S.viewer.clock.currentTime;
+    const pts = entities.map(e => e.position && e.position.getValue(now)).filter(Boolean);
+    if (!pts.length) return;
+    stopOrbit();
+    const bs = C.BoundingSphere.fromPoints(pts);
+    flySphereP(bs.center, new C.HeadingPitchRange(0, toRad(-60), Math.max(bs.radius * 3.2, 15000)), { duration: 1.6 });
+  }
+
   function renderPins() {
-    const v = S.viewer;
-    S.entities.forEach(e => v.entities.remove(e));
+    const ents = S.ds.entities;
+    ents.suspendEvents();               // 1,000件以上でも一括で追加
+    ents.removeAll();
     S.entities.clear();
+    const pointSize = IS_MOBILE ? 10 : 12;
     S.spots.forEach(sp => {
-      const e = v.entities.add({
+      const e = ents.add({
         position: C.Cartesian3.fromDegrees(sp.lng, sp.lat, 0),
         point: {
-          pixelSize: 14, color: COLOR_PIN, outlineColor: C.Color.WHITE, outlineWidth: 2,
-          heightReference: (S.terrainOn || S.photoreal) ? C.HeightReference.CLAMP_TO_GROUND : C.HeightReference.NONE,
-          disableDepthTestDistance: Number.POSITIVE_INFINITY
+          pixelSize: pointSize, color: S.visits.has(sp.spot_id) ? COLOR_VISITED : COLOR_PIN,
+          outlineColor: C.Color.WHITE, outlineWidth: 2,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY   // 地表への貼り付け計算をしない（軽量化）
         },
         label: {
           text: pinLabel(sp),
-          font: '700 14px "M PLUS 1p", sans-serif',
+          font: `700 ${IS_MOBILE ? 12 : 14}px "M PLUS 1p", sans-serif`,
           fillColor: C.Color.WHITE, outlineColor: C.Color.BLACK, outlineWidth: 3,
           style: C.LabelStyle.FILL_AND_OUTLINE,
           showBackground: true, backgroundColor: C.Color.fromCssColorString("rgba(15,39,64,.75)"),
-          pixelOffset: new C.Cartesian2(0, -24),
-          heightReference: (S.terrainOn || S.photoreal) ? C.HeightReference.CLAMP_TO_GROUND : C.HeightReference.NONE,
+          backgroundPadding: new C.Cartesian2(5, 3),
+          pixelOffset: new C.Cartesian2(0, IS_MOBILE ? -18 : -22),
           disableDepthTestDistance: Number.POSITIVE_INFINITY,
-          scaleByDistance: new C.NearFarScalar(2e5, 1, 2e7, .65)
+          distanceDisplayCondition: LABEL_NEAR
         }
       });
       e.spot = sp;
+      e._mode = "normal";
       S.entities.set(sp.spot_id, e);
     });
+    ents.resumeEvents();
     applyPinVisibility();
   }
 
   /** sp を渡すとそのピンだけ表示、null で全ピンを表示 */
   function showOnlyPin(sp) {
-    S.entities.forEach((e, id) => { e.show = !sp || id === sp.spot_id; });
+    const ents = S.ds.entities;
+    ents.suspendEvents();
+    S.entities.forEach((e, id) => {
+      const show = !sp || id === sp.spot_id;
+      if (e.show !== show) e.show = show;
+    });
+    ents.resumeEvents();
+    // 1件だけ表示するときはクラスタを止めて、確実にピンと名前を出す
+    S.ds.clustering.enabled = !sp;
+    S.viewer.scene.requestRender();
   }
 
   /**
@@ -524,14 +648,22 @@
   function setPin(sp, mode) {
     const e = S.entities.get(sp.spot_id);
     if (!e) return;
+    const visited = S.visits.has(sp.spot_id);
+    const sig = mode + (visited ? "v" : "");
+    if (e._mode === sig) return;          // 変化がなければ何もしない（1,000件以上でも軽く）
+    e._mode = sig;
     e.label.text = pinLabel(sp);
+    const base = IS_MOBILE ? 10 : 12;
     const style = {
-      normal: [14, S.visits.has(sp.spot_id) ? COLOR_VISITED : COLOR_PIN],
-      hi: [28, COLOR_HI],
-      current: [20, COLOR_CUR]
+      normal: [base, visited ? COLOR_VISITED : COLOR_PIN],
+      hi: [base + 14, COLOR_HI],
+      current: [base + 6, COLOR_CUR]
     }[mode];
     e.point.pixelSize = style[0];
     e.point.color = style[1];
+    // 光っている・いる場所の名前は遠くからでも表示
+    e.label.distanceDisplayCondition = mode === "normal" ? LABEL_NEAR : undefined;
+    S.viewer.scene.requestRender();
   }
   function refreshPinColors() {
     S.spots.forEach(sp => setPin(sp, S.current && S.current.spot_id === sp.spot_id ? "current" : "normal"));
@@ -734,6 +866,7 @@
     seq.push(winner);
 
     showOnlyPin(null);   // ルーレット中は全ピンを表示
+    S.ds.clustering.enabled = false;   // 光るピンが見えるよう、まとめ表示を一時停止
     Sfx.drumroll(3.8);
     let delay = 55, prev = null;
     for (const p of seq) {
