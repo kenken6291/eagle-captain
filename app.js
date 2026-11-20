@@ -270,6 +270,7 @@
     try {
       const r = await Api.call("getClientConfig");
       if (r.google_maps_api_key) APP_CONFIG.GOOGLE_MAPS_API_KEY = r.google_maps_api_key;
+      if (r.default_model) AiModel.defaultModel = r.default_model;
     } catch (e) {
       debugLog("client config failed", e);
     }

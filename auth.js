@@ -23,6 +23,62 @@ function hideLoading() { $("#loading").classList.add("hidden"); }
 
 function debugLog(...a) { if (APP_CONFIG.DEBUG_MODE) console.log("[eagle]", ...a); }
 
+/* ---------- AIモデル選択 ---------- */
+const AI_ACTIONS = ["generateSpots", "quiz", "explain"];
+const AiModel = {
+  options: (Array.isArray(APP_CONFIG.GEMINI_MODEL_OPTIONS) && APP_CONFIG.GEMINI_MODEL_OPTIONS.length)
+    ? APP_CONFIG.GEMINI_MODEL_OPTIONS : [{ value: "", label: "自動モード（汎用の最新）" }],
+  value: APP_CONFIG.GEMINI_MODEL || "",
+  lastUsed: "",
+  defaultModel: "",
+
+  load() {
+    let saved = null;
+    try { saved = localStorage.getItem(APP_CONFIG.STORAGE_KEY_MODEL); } catch (e) { /* ignore */ }
+    if (saved !== null && this.options.some(o => o.value === saved)) this.value = saved;
+  },
+  label(v) {
+    const o = this.options.find(x => x.value === v);
+    return o ? o.label : v;
+  },
+  set(v) {
+    this.value = v;
+    try { localStorage.setItem(APP_CONFIG.STORAGE_KEY_MODEL, v); } catch (e) { /* ignore */ }
+  },
+  /** GASの応答から実際に使ったモデルを記録 */
+  noteResult(res) {
+    if (!res || !res.model) return;
+    this.lastUsed = res.fallback
+      ? `${res.model}（${res.requestedModel} が使えなかったため自動で切替）`
+      : res.model;
+    const el = $("#aiModelUsed");
+    if (el) el.textContent = this.lastUsed;
+    if (res.fallback && this.value && !this._warned) {
+      this._warned = true;
+      showToast(`選んだAIモデルが使えないため、${res.model} で動かしました`, 4000);
+    }
+  },
+  open() {
+    const sel = $("#aiModelSelect");
+    sel.innerHTML = this.options.map(o => `<option value="${esc(o.value)}">${esc(o.label)}</option>`).join("");
+    sel.value = this.value;
+    $("#aiModelUsed").textContent = this.lastUsed || (this.value ? this.value : (this.defaultModel || "自動"));
+    $("#aiModelModal").classList.remove("hidden");
+  },
+  close() { $("#aiModelModal").classList.add("hidden"); },
+  init() {
+    this.load();
+    $("#btnAiModel").addEventListener("click", () => this.open());
+    $("#aiModelClose").addEventListener("click", () => this.close());
+    $("#aiModelModal").addEventListener("click", e => { if (e.target.id === "aiModelModal") this.close(); });
+    $("#aiModelSelect").addEventListener("change", e => {
+      this.set(e.target.value);
+      this._warned = false;
+      showToast(`AIモデル：${this.label(this.value)}`);
+    });
+  }
+};
+
 /* ---------- API（GAS） ---------- */
 const Api = {
   token: localStorage.getItem(APP_CONFIG.STORAGE_KEY_TOKEN) || "",
@@ -42,7 +98,11 @@ const Api = {
       const r = await fetch(APP_CONFIG.GAS_API_URL, {
         method: "POST",
         headers: { "Content-Type": "text/plain;charset=utf-8" },
-        body: JSON.stringify({ action, token: this.token, ...data })
+        body: JSON.stringify({
+          action, token: this.token,
+          ...(AI_ACTIONS.includes(action) && AiModel.value ? { model: AiModel.value } : {}),
+          ...data
+        })
       });
       res = await r.json();
     } catch (e) {
@@ -58,6 +118,7 @@ const Api = {
       if (err.code === "MUST_CHANGE") Auth.openPwModal(true);
       throw err;
     }
+    if (AI_ACTIONS.includes(action)) AiModel.noteResult(res);
     return res;
   }
 };
@@ -254,5 +315,6 @@ document.addEventListener("DOMContentLoaded", () => {
   document.title = `${APP_CONFIG.APP_TITLE}｜${APP_CONFIG.APP_SUBTITLE}`;
   $("#versionBadge").textContent = APP_CONFIG.VERSION;
   $("#authVersion").textContent = `${APP_CONFIG.APP_TITLE}  ${APP_CONFIG.VERSION}`;
+  AiModel.init();
   Auth.init();
 });

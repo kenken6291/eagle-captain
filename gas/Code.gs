@@ -9,8 +9,10 @@
  *   GEMINI_API_KEY : 必須  Gemini APIキー
  *   GOOGLE_MAPS_API_KEY : 推奨  Google マップのAPIキー（フォトリアル3D・ストリートビュー用）。
  *                         ログイン済みの会員のブラウザにだけ渡します
- *   GEMINI_MODEL   : 任意  既定 gemini-2.5-flash
- *   TTS_MODEL      : 任意  既定 gemini-2.5-flash-preview-tts
+ *   GEMINI_MODEL   : 任意  既定モデル。未設定なら汎用の最新（FALLBACK_GEMINI_MODELS）
+ *                    モデルの優先順：①画面の「AIモデル」選択 → ②GEMINI_MODEL → ③汎用の最新
+ *                    指定モデルに該当がない（廃止・未公開・名前違い）時は自動で汎用の最新へ切り替え
+ *   TTS_MODEL      : 任意  既定 gemini-3.8-flash-tts（該当がない時は FALLBACK_TTS_MODELS を順に試す）
  *   TTS_VOICE      : 任意  既定 Orus（低めで張りのある男性系）
  *   SPREADSHEET_ID : 任意  スタンドアロンGASの場合のみ
  *   ADMIN_EMAILS   : 推奨  管理者のメールアドレス（カンマ区切り）。全カテゴリ・全スポットを編集／削除可能
@@ -30,6 +32,18 @@ const HEADERS = {
 const TZ = "Asia/Tokyo";
 const SESSION_DAYS = 30;
 const APP_NAME = "鷲の目紀行";
+const GAS_VERSION = "v1.10.0";
+
+/* ---------- Gemini モデル設定（2026年11月時点） ---------- */
+// 指定なし・該当なしの時に使う汎用最新モデル（先頭から順に試す）
+//   gemini-flash-latest : Googleが常に最新の汎用モデルへ自動で差し替えるエイリアス
+//   gemini-4-hydrogen   : 汎用の最新モデル（「日々の暮らしをサポート」）
+//   gemini-3.8-flash    : 最終的な保険
+const FALLBACK_GEMINI_MODELS = ["gemini-flash-latest", "gemini-4-hydrogen", "gemini-3.8-flash"];
+const FALLBACK_TTS_MODELS = ["gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts", "gemini-2.5-flash-preview-tts"];
+const GEMINI_MODEL_PATTERN = /^gemini-[a-z0-9][a-z0-9.\-]{0,60}$/;
+const GEMINI_RETRY_CODES = [429, 500, 503];
+const GEMINI_MAX_ATTEMPTS = 3;
 
 const CAPTAIN_SYSTEM = [
   "あなたは空中遊覧ツアーを率いる「イーグル隊長」です。",
@@ -337,7 +351,12 @@ function canEdit_(user, createdBy) {
  * ========================================================= */
 /** ブラウザで使う設定（ログイン済み会員のみ） */
 function getClientConfig_() {
-  return { ok: true, google_maps_api_key: prop_("GOOGLE_MAPS_API_KEY") };
+  return {
+    ok: true,
+    google_maps_api_key: prop_("GOOGLE_MAPS_API_KEY"),
+    gas_version: GAS_VERSION,
+    default_model: resolveGeminiModel_("")
+  };
 }
 
 function getThemes_(req, user) {
@@ -772,9 +791,9 @@ function generateSpots_(req) {
     "- tags: 都道府県や国、種別などをカンマ区切りで3つ程度"
   ]).filter(Boolean).join("\n");
 
-  const out = gemini_(text, schema, { system: CAPTAIN_SYSTEM, temperature: 0.4 });
+  const out = gemini_(text, schema, { system: CAPTAIN_SYSTEM, temperature: 0.4, model: req.model });
   const spots = (out.spots || []).map(normalizeSpot_).filter(s => s);
-  return { ok: true, spots: spots };
+  return withModel_({ ok: true, spots: spots }, out);
 }
 
 function quiz_(req) {
@@ -805,9 +824,11 @@ function quiz_(req) {
     "- answer は正解の記号（A か B）",
     "- explanation は隊長の口調で正解の理由を60文字以内で"
   ].join("\n");
-  const q = gemini_(text, schema, { system: CAPTAIN_SYSTEM, temperature: 0.8 });
+  const q = gemini_(text, schema, { system: CAPTAIN_SYSTEM, temperature: 0.8, model: req.model });
+  const meta = { _model: q._model, _requested: q._requested };
+  delete q._model; delete q._requested;
   q.answer = String(q.answer || "A").toUpperCase() === "B" ? "B" : "A";
-  return { ok: true, quiz: q };
+  return withModel_({ ok: true, quiz: q }, meta);
 }
 
 function explain_(req) {
@@ -816,16 +837,79 @@ function explain_(req) {
   const schema = { type: "OBJECT", properties: { comment: { type: "STRING" } }, required: ["comment"] };
   const text = "スポット「" + name + "」（" + (req.tags || "") + "、テーマ：" + (req.theme_name || "") +
     "）に到着しました。上空から案内するセリフを100文字程度で作ってください。";
-  const out = gemini_(text, schema, { system: CAPTAIN_SYSTEM, temperature: 0.9 });
-  return { ok: true, comment: String(out.comment || "").trim() };
+  const out = gemini_(text, schema, { system: CAPTAIN_SYSTEM, temperature: 0.9, model: req.model });
+  return withModel_({ ok: true, comment: String(out.comment || "").trim() }, out);
 }
 
-/** Gemini テキスト生成（JSON出力） */
+/** 使うモデルを決定：画面の指定 → スクリプトプロパティ → 汎用の最新。不正な名前は無視 */
+function resolveGeminiModel_(requested) {
+  const req = String(requested || "").trim().toLowerCase();
+  if (req && GEMINI_MODEL_PATTERN.test(req)) return req;
+  const p = String(prop_("GEMINI_MODEL")).trim().toLowerCase();
+  if (p && GEMINI_MODEL_PATTERN.test(p)) return p;
+  return FALLBACK_GEMINI_MODELS[0];
+}
+
+/** 1モデルに対して呼び出す。混雑(429/500/503)時は待ち時間を伸ばしながら再試行 */
+function callGeminiModel_(model, key, body) {
+  const url = "https://generativelanguage.googleapis.com/v1beta/models/" + encodeURIComponent(model) + ":generateContent";
+  const options = {
+    method: "post",
+    contentType: "application/json",
+    headers: { "x-goog-api-key": key },
+    payload: JSON.stringify(body),
+    muteHttpExceptions: true
+  };
+  let code = 0, text = "";
+  for (let attempt = 1; attempt <= GEMINI_MAX_ATTEMPTS; attempt++) {
+    const res = UrlFetchApp.fetch(url, options);
+    code = res.getResponseCode();
+    text = res.getContentText();
+    if (code === 200) break;
+    if (GEMINI_RETRY_CODES.indexOf(code) < 0 || attempt === GEMINI_MAX_ATTEMPTS) break;
+    Utilities.sleep(2000 * attempt);
+  }
+  return { code: code, text: text };
+}
+
+/** モデルが存在しない（廃止・名前違い・この用途に非対応）ことを示す応答か */
+function isModelNotFound_(code, text) {
+  if (code === 404) return true;
+  if (code === 400 && /model|NOT_FOUND|not found|not supported/i.test(text)) {
+    return /not found|is not supported|NOT_FOUND|unknown model|invalid model/i.test(text);
+  }
+  return false;
+}
+
+/** 候補モデルを順に試し、該当なしなら次へ。{ res, model } を返す */
+function callWithFallback_(first, fallbacks, key, body) {
+  const candidates = [first].concat(fallbacks.filter(m => m !== first));
+  let res = null, used = first;
+  for (let i = 0; i < candidates.length; i++) {
+    used = candidates[i];
+    res = callGeminiModel_(used, key, body);
+    if (!isModelNotFound_(res.code, res.text)) break;
+    console.warn("Geminiモデル「" + used + "」に該当がないため次の候補に切り替えます");
+  }
+  return { res: res, model: used };
+}
+
+/** レスポンスに実際に使ったモデル名を添える */
+function withModel_(resp, out) {
+  if (out && out._model) {
+    resp.model = out._model;
+    resp.requestedModel = out._requested;
+    resp.fallback = out._model !== out._requested;
+  }
+  return resp;
+}
+
+/** Gemini テキスト生成（JSON出力）。戻り値に _model / _requested を付ける */
 function gemini_(prompt, schema, opts) {
   opts = opts || {};
   const key = prop_("GEMINI_API_KEY");
   if (!key) throw err_("GEMINI_API_KEY がスクリプトプロパティに設定されていません");
-  const model = prop_("GEMINI_MODEL") || "gemini-2.5-flash";
+  const model = resolveGeminiModel_(opts.model);
   const body = {
     contents: [{ role: "user", parts: [{ text: prompt }] }],
     generationConfig: {
@@ -836,26 +920,25 @@ function gemini_(prompt, schema, opts) {
   };
   if (opts.system) body.systemInstruction = { parts: [{ text: opts.system }] };
 
-  const res = UrlFetchApp.fetch("https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent", {
-    method: "post",
-    contentType: "application/json",
-    headers: { "x-goog-api-key": key },
-    payload: JSON.stringify(body),
-    muteHttpExceptions: true
-  });
-  const code = res.getResponseCode();
+  const r = callWithFallback_(model, FALLBACK_GEMINI_MODELS, key, body);
+  const code = r.res.code;
   if (code !== 200) {
-    console.error("Gemini error " + code + ": " + res.getContentText());
+    console.error("Gemini error " + code + " (" + r.model + "): " + r.res.text);
     throw err_(code === 429 ? "AIが混み合っています。少し待ってからお試しください" : "AIの呼び出しに失敗しました（" + code + "）", "GEMINI");
   }
-  const data = JSON.parse(res.getContentText());
+  const data = JSON.parse(r.res.text);
   const parts = (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) || [];
-  const text = parts.map(p => p.text || "").join("").replace(/```json|```/g, "").trim();
+  // 思考モデルの「thought」パートは除外して本文だけを使う
+  const text = parts.filter(p => !p.thought).map(p => p.text || "").join("").replace(/```json|```/g, "").trim();
+  let out;
   try {
-    return JSON.parse(text);
+    out = JSON.parse(text);
   } catch (e) {
     throw err_("AIの応答を読み取れませんでした", "GEMINI");
   }
+  out._model = r.model;
+  out._requested = model;
+  return out;
 }
 
 /** Gemini TTS（Driveにキャッシュして同じセリフは再生成しない） */
@@ -864,11 +947,13 @@ function tts_(req) {
   if (!text) throw err_("読み上げるテキストがありません");
   const key = prop_("GEMINI_API_KEY");
   if (!key) throw err_("GEMINI_API_KEY がスクリプトプロパティに設定されていません");
-  const model = prop_("TTS_MODEL") || "gemini-2.5-flash-preview-tts";
+  const model = (GEMINI_MODEL_PATTERN.test(String(prop_("TTS_MODEL")).trim().toLowerCase())
+    ? String(prop_("TTS_MODEL")).trim().toLowerCase() : FALLBACK_TTS_MODELS[0]);
   const voice = prop_("TTS_VOICE") || "Orus";
 
   // "v2" … 指示文入りで作った古い音声キャッシュを使わないための目印
-  const cacheName = sha256_("v2|" + model + "|" + voice + "|" + text).slice(0, 40) + ".json";
+  // モデルに依らず同じセリフ＋声ならキャッシュを再利用（モデル切替で作り直さない）
+  const cacheName = sha256_("v3|" + voice + "|" + text).slice(0, 40) + ".json";
   const folder = ttsFolder_();
   const hit = folder.getFilesByName(cacheName);
   if (hit.hasNext()) {
@@ -883,25 +968,19 @@ function tts_(req) {
       speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } }
     }
   };
-  const res = UrlFetchApp.fetch("https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent", {
-    method: "post",
-    contentType: "application/json",
-    headers: { "x-goog-api-key": key },
-    payload: JSON.stringify(body),
-    muteHttpExceptions: true
-  });
-  if (res.getResponseCode() !== 200) {
-    console.error("TTS error " + res.getResponseCode() + ": " + res.getContentText());
+  const r = callWithFallback_(model, FALLBACK_TTS_MODELS, key, body);
+  if (r.res.code !== 200) {
+    console.error("TTS error " + r.res.code + " (" + r.model + "): " + r.res.text);
     throw err_("音声の生成に失敗しました", "TTS");
   }
-  const data = JSON.parse(res.getContentText());
+  const data = JSON.parse(r.res.text);
   const parts = (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) || [];
   const audio = parts.filter(p => p.inlineData)[0];
   if (!audio) throw err_("音声データが返りませんでした", "TTS");
 
   const o = { mimeType: audio.inlineData.mimeType, data: audio.inlineData.data };
   try { folder.createFile(cacheName, JSON.stringify(o), "application/json"); } catch (e) { /* キャッシュ失敗は無視 */ }
-  return { ok: true, cached: false, mimeType: o.mimeType, data: o.data };
+  return { ok: true, cached: false, mimeType: o.mimeType, data: o.data, model: r.model };
 }
 
 function ttsFolder_() {
@@ -1012,6 +1091,10 @@ function tempPassword_() {
 /* ---------- 動作テスト用（エディタから実行） ---------- */
 function testGemini() {
   Logger.log(JSON.stringify(explain_({ name: "姫路城", tags: "国宝,兵庫", theme_name: "日本のお城巡り" })));
+}
+function testModels() {
+  Logger.log("GAS " + GAS_VERSION + " / 既定モデル: " + resolveGeminiModel_("") + " / TTS: " + (prop_("TTS_MODEL") || FALLBACK_TTS_MODELS[0]));
+  Logger.log(JSON.stringify(explain_({ name: "姫路城", tags: "国宝,兵庫", theme_name: "日本のお城巡り", model: "gemini-4-hydrogen" })));
 }
 function testTts() {
   const r = tts_({ text: "しっかり掴まっておれ、出発だ！" });

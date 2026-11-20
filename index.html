@@ -15,7 +15,7 @@
   <link href="https://cdn.jsdelivr.net/npm/cesium@1.121.0/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/cesium@1.121.0/Build/Cesium/Cesium.js"></script>
 
-  <link rel="stylesheet" href="style.css?v=1.9.0">
+  <link rel="stylesheet" href="style.css?v=1.10.0">
 </head>
 <body>
 
@@ -49,6 +49,7 @@
         </button>
         <div id="userDropdown" class="dropdown hidden" role="menu">
           <button id="btnManageMenu" role="menuitem">カテゴリ・スポット管理</button>
+          <button id="btnAiModel" role="menuitem">AIモデル選択</button>
           <button id="btnChangePw" role="menuitem">パスワード変更</button>
           <button id="btnLogout" role="menuitem">ログアウト</button>
         </div>
@@ -458,6 +459,21 @@
     </div>
   </div>
 
+  <!-- ===== AIモデル選択モーダル ===== -->
+  <div id="aiModelModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="aiModelTitle">
+    <div class="modal-box pw-box">
+      <button class="modal-x" id="aiModelClose" aria-label="閉じる">×</button>
+      <h2 id="aiModelTitle" class="modal-title">AIモデル選択</h2>
+      <p class="hint">スポット取り込み・クイズ・隊長の解説に使うGeminiモデルを選べます。</p>
+      <div class="form-row">
+        <label for="aiModelSelect">使うAIモデル</label>
+        <select id="aiModelSelect"></select>
+      </div>
+      <p class="hint">選んだモデルが使えない時は、汎用の最新モデルに自動で切り替わります。</p>
+      <p class="hint">使用中のモデル：<code id="aiModelUsed">-</code></p>
+    </div>
+  </div>
+
   <!-- ===== パスワード変更モーダル（初回強制／任意） ===== -->
   <div id="pwModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="pwTitle">
     <div class="modal-box pw-box">
@@ -497,8 +513,8 @@
   <div id="toast" class="toast" role="status"></div>
   <div id="versionBadge" class="version-badge"></div>
 
-  <script src="config.js?v=1.9.0"></script>
-  <script src="auth.js?v=1.9.0"></script>
-  <script src="app.js?v=1.9.0"></script>
+  <script src="config.js?v=1.10.0"></script>
+  <script src="auth.js?v=1.10.0"></script>
+  <script src="app.js?v=1.10.0"></script>
 </body>
 </html>

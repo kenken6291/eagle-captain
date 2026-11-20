@@ -20,6 +20,7 @@ eagle-captain/
 
 - 地図は CesiumJS。トークン無しでも Esri 航空写真で動作し、`CESIUM_ION_TOKEN` を入れると3D地形＋3D建物になります。
 - Gemini APIキーはフロントに置かず、GASのスクリプトプロパティで管理します（GitHub Pagesはソースが公開されるため）。
+- AIモデルはユーザーメニューの「AIモデル選択」で切替可能（自動／4 Hydrogen／4 Neon／4 Carbon／4 Argon／3.8 Flash／3.5 Flash）。選んだモデルが使えない時は汎用の最新モデルへ自動で切り替わります。
 - 隊長ボイスは Gemini TTS → 失敗時ブラウザ音声（低音男性）の順で再生。同じセリフは Drive にキャッシュし、API消費を抑えます。
 - 豆知識と写真ギャラリーは Wikipedia（日本語版）から自動取得します。
 - スプレッドシートには仕様の3シートに加え、ログイン状態を管理する `Sessions` シートを追加しています。
@@ -41,13 +42,13 @@ Apps Script の「プロジェクトの設定」→「スクリプト プロパ�
 | プロパティ | 必須 | 内容 |
 |---|---|---|
 | `GEMINI_API_KEY` | ○ | Google AI Studio で発行したキー |
-| `GEMINI_MODEL` | | 既定 `gemini-2.5-flash` |
-| `TTS_MODEL` | | 既定 `gemini-2.5-flash-preview-tts`（新しいTTSモデルを使う場合はここを変更） |
+| `GEMINI_MODEL` | | 既定モデル（未設定なら汎用の最新 `gemini-flash-latest` → `gemini-4-hydrogen` → `gemini-3.8-flash`）。画面の「AIモデル選択」が優先 |
+| `TTS_MODEL` | | 既定 `gemini-3.8-flash-tts`（使えない時は `gemini-3.8-flash-lite-tts` → `gemini-2.5-flash-preview-tts` に自動切替） |
 | `TTS_VOICE` | | 既定 `Orus`。`Charon` `Fenrir` `Algenib` なども試せます |
 | `GOOGLE_MAPS_API_KEY` | 推奨 | Google マップのAPIキー（フォトリアル3D・ストリートビュー）。ログインした会員のブラウザにだけ渡されます |
 | `ADMIN_EMAILS` | 推奨 | 管理者のメールアドレス（複数はカンマ区切り）。全カテゴリの名前変更・削除、全スポットの削除ができます |
 
-設定後、エディタで `testGemini` と `testTts` を実行し、ログにセリフと音声データ長が出れば準備完了です。
+設定後、エディタで `testGemini`（モデル確認は `testModels`）と `testTts` を実行し、ログにセリフと音声データ長が出れば準備完了です。
 
 ## 3. GASのデプロイ
 
